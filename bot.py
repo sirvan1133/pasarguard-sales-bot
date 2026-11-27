@@ -203,6 +203,7 @@ def get_settings(env: dict[str, str]) -> dict:
         "reseller_price_per_gb": 5000,
         "reseller_min_gb": 500,
         "reseller_max_gb_per_acc": 200,
+        "gb_options": list(DEFAULT_GB_OPTIONS),
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -876,12 +877,13 @@ def send_qr_with_sub(token: str, chat_id: int, sub_url: str, caption: str, env: 
         tmp_path.unlink(missing_ok=True)
 
 
-def build_gb_keyboard(prefix: str = "buy") -> dict:
+def build_gb_keyboard(prefix: str = "buy", env: dict[str, str] | None = None) -> dict:
+    gb_list = get_settings(env or load_env()).get("gb_options") or DEFAULT_GB_OPTIONS
     rows = [
-        [{"text": "20 گیگ", "callback_data": f"{prefix}_gb:20"}, {"text": "30 گیگ", "callback_data": f"{prefix}_gb:30"}, {"text": "50 گیگ", "callback_data": f"{prefix}_gb:50"}],
-        [{"text": "100 گیگ", "callback_data": f"{prefix}_gb:100"}, {"text": "200 گیگ", "callback_data": f"{prefix}_gb:200"}, {"text": "400 گیگ", "callback_data": f"{prefix}_gb:400"}],
-        [{"text": "1000 گیگ", "callback_data": f"{prefix}_gb:1000"}, {"text": "✏️ حجم دلخواه", "callback_data": f"{prefix}_gb:custom"}],
+        [{"text": f"{g} گیگ", "callback_data": f"{prefix}_gb:{g}"} for g in gb_list[i:i+3]]
+        for i in range(0, len(gb_list), 3)
     ]
+    rows.append([{"text": "✏️ حجم دلخواه", "callback_data": f"{prefix}_gb:custom"}])
     return {"inline_keyboard": rows}
 
 
@@ -933,6 +935,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
         f"• حالت کارت‌به‌کارت: <code>{cm_s}</code>\n"
         f"• نمایندگی: هر گیگ <code>{int(cfg['reseller_price_per_gb']):,}</code> ت | کف <code>{cfg['reseller_min_gb']}</code> GB | سقف تک‌اکانت <code>{cfg['reseller_max_gb_per_acc']}</code> GB\n"
+        f"• بسته‌های حجم: <code>{', '.join(str(x) for x in cfg.get('gb_options', DEFAULT_GB_OPTIONS))}</code>\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
@@ -959,7 +962,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
             [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
-            [{"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
+            [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
+            [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
         ]
     }
     if message_id is not None:
@@ -1562,7 +1566,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             cfg = get_settings(env)
             rate = get_usdt_toman_rate()
             lines = [f"💰 <b>تعرفه و نرخ لحظه‌ای</b>\n💵 نرخ فعلی تتر: <code>{rate:,}</code> تومان\n"]
-            for gb in DEFAULT_GB_OPTIONS:
+            for gb in cfg.get("gb_options", DEFAULT_GB_OPTIONS):
                 p1 = calc_price(gb, 1, env)
                 p12 = calc_price(gb, 12, env)
                 lines.append(
@@ -1991,6 +1995,11 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                     val = int(t.replace("%", "").strip())
                     if val < 1 or val > 90:
                         raise ValueError("باید بین ۱ تا ۹۰ باشد")
+                elif key == "gb_options":
+                    nums = sorted({int(x) for x in re.split(r"[\s,،]+", t.strip()) if x.isdigit() and 1 <= int(x) <= 10000})
+                    if not nums:
+                        raise ValueError("حداقل یک عدد معتبر بین ۱ تا ۱۰۰۰۰ وارد کنید")
+                    val = nums
                 elif key in ("pct_under_threshold", "pct_over_threshold", "renew_discount_pct", "global_discount_pct", "referral_reward_pct"):
                     val = float(t.replace("%", "").strip())
                     if val < 0 or val > 100:
@@ -2977,6 +2986,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "reseller_price_per_gb": "قیمت هر گیگ برای نماینده به تومان (مثلاً 5000)",
             "reseller_min_gb": "حداقل گیگ شرط دریافت نمایندگی (مثلاً 500)",
             "reseller_max_gb_per_acc": "حداکثر حجم هر تک‌اکانت نماینده به گیگ (0 = نامحدود)",
+            "gb_options": "لیست حجم‌های پیش‌فرض را با کاما یا فاصله بفرستید (مثلاً: 20,30,50,100,200,400,1000)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
