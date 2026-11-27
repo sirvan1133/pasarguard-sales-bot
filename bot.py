@@ -43,6 +43,7 @@ INVOICES_PATH = DATA_DIR / "invoices.json"
 REMINDERS_PATH = DATA_DIR / "reminders.json"
 META_PATH = DATA_DIR / "meta.json"
 RESELLERS_PATH = DATA_DIR / "resellers.json"
+LEDGER_PATH = DATA_DIR / "ledger.json"
 TENANTS_DIR = DATA_DIR / "tenants"
 
 DEFAULT_GB_OPTIONS = [20, 30, 50, 100, 200, 400, 1000]
@@ -715,23 +716,52 @@ def get_wallet_balance(user_id: int) -> int:
         return int(load_json(USERS_PATH).get(str(user_id), {}).get("balance_toman", 0))
 
 
-def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int) -> tuple[bool, int]:
-    """Cross-process file-locked wallet adjustment on any users.json."""
+def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int, note: str = "") -> tuple[bool, int]:
+    """Cross-process file-locked wallet adjustment + ledger logging on any users.json."""
     uid = str(user_id)
+    now = int(time.time())
+    notify_low = False
     with users_file_lock(users_path):
         users = load_json(users_path)
-        u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
+        u = users.setdefault(uid, {"first_seen": now, "last_seen": now, "username": ""})
         cur = int(u.get("balance_toman", 0))
         new_bal = cur + delta
         if new_bal < 0:
             return False, cur
         u["balance_toman"] = new_bal
+        if delta < 0 and users_path != USERS_PATH and new_bal <= 200000:
+            last_alert = int(u.get("low_bal_alert_ts") or 0)
+            if now - last_alert >= 12 * 3600:
+                u["low_bal_alert_ts"] = now
+                notify_low = True
         save_json(users_path, users)
-        return True, new_bal
+
+        ledger_path = users_path.parent / "ledger.json"
+        ledger = load_json(ledger_path)
+        entries = ledger.get(uid, [])
+        entries.append({"ts": now, "delta": int(delta), "balance": new_bal, "note": note or ("شارژ" if delta > 0 else "برداشت")})
+        ledger[uid] = entries[-50:]
+        save_json(ledger_path, ledger)
+
+    if notify_low:
+        try:
+            p_env = load_env_file(users_path.parent / ".env")
+            p_tok = p_env.get("BOT_TOKEN")
+            if p_tok:
+                send_message(
+                    p_tok,
+                    user_id,
+                    f"⚠️ <b>هشدار کمبود موجودی نمایندگی!</b>\n\n"
+                    f"👛 موجودی فعلی شما به <b>{new_bal:,} تومان</b> رسیده است.\n"
+                    "لطفاً پیش از اتمام موجودی، حساب خود را شارژ کنید تا ساخت اکانت در رباتتان متوقف نشود.",
+                )
+        except Exception as e:
+            log.warning("Low balance alert failed for %s: %s", user_id, e)
+    return True, new_bal
 
 
-def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
-    return adjust_wallet_balance_at(USERS_PATH, user_id, delta)
+def adjust_wallet_balance(user_id: int, delta: int, note: str = "") -> tuple[bool, int]:
+    return adjust_wallet_balance_at(USERS_PATH, user_id, delta, note=note)
 
 
 def get_upstream_balance(env: dict[str, str]) -> int | None:
@@ -753,7 +783,7 @@ def _resolve_wholesale_ppg(parent_dir: Path, owner_s: str, cur_env: dict[str, st
     return int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
 
 
-def charge_upstream_chain(data_dir: Path, gb: int) -> tuple[bool, str]:
+def charge_upstream_chain(data_dir: Path, gb: int, note: str = "") -> tuple[bool, str]:
     """Recursively deduct wholesale GB cost up the parent tenant chain."""
     cur_env = load_env_file(data_dir / ".env")
     parent_s = cur_env.get("PARENT_DIR")
@@ -763,17 +793,17 @@ def charge_upstream_chain(data_dir: Path, gb: int) -> tuple[bool, str]:
     parent_dir = Path(parent_s)
     ppg = _resolve_wholesale_ppg(parent_dir, owner_s, cur_env)
     cost = int(gb) * ppg
-    ok_up, err_up = charge_upstream_chain(parent_dir, gb)
+    ok_up, err_up = charge_upstream_chain(parent_dir, gb, note=note)
     if not ok_up:
         return False, err_up
-    ok_cur, cur_bal = adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), -cost)
+    ok_cur, cur_bal = adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), -cost, note=note or f"کسر عمده {gb}GB")
     if not ok_cur:
-        refund_upstream_chain(parent_dir, gb)
+        refund_upstream_chain(parent_dir, gb, note="برگشت خطای کسر")
         return False, f"❌ موجودی کیف پول نمایندگی نزد بالادست کافی نیست (نیاز: {cost:,} ت | موجودی: {cur_bal:,} ت). لطفاً حساب نمایندگی خود را شارژ کنید."
     return True, ""
 
 
-def refund_upstream_chain(data_dir: Path, gb: int) -> None:
+def refund_upstream_chain(data_dir: Path, gb: int, note: str = "") -> None:
     cur_env = load_env_file(data_dir / ".env")
     parent_s = cur_env.get("PARENT_DIR")
     owner_s = cur_env.get("TENANT_OWNER_ID")
@@ -781,8 +811,8 @@ def refund_upstream_chain(data_dir: Path, gb: int) -> None:
         return
     parent_dir = Path(parent_s)
     ppg = _resolve_wholesale_ppg(parent_dir, owner_s, cur_env)
-    adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), int(gb) * ppg)
-    refund_upstream_chain(parent_dir, gb)
+    adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), int(gb) * ppg, note=note or f"برگشت عمده {gb}GB")
+    refund_upstream_chain(parent_dir, gb, note=note)
 
 
 def is_user_blocked(user_id: int) -> tuple[bool, int]:
@@ -891,6 +921,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         "inline_keyboard": [
             [{"text": "➕ ساخت اکانت جدید", "callback_data": "res_create"}, {"text": "📦 ساخت گروهی (Bulk)", "callback_data": "res_bulk"}],
             [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup"}],
+            [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}, {"text": "📡 وضعیت سرورها", "callback_data": "res_nodes"}],
             [{"text": "🤖 ربات اختصاصی من (White-Label)", "callback_data": "res_subbot"}],
         ]
     }
@@ -1011,7 +1042,7 @@ def check_force_join(token: str, env: dict[str, str], chat_id: int, user_id: int
 
 
 def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = None) -> int:
-    files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH]
+    files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH, LEDGER_PATH]
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_path = Path(tmp.name)
     sent = 0
@@ -1184,7 +1215,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}] if tenant else [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
         [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
         [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
-        [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
+        [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes"}],
+        [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
     ])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
@@ -1629,6 +1661,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         kb = {
             "inline_keyboard": [
                 [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}, {"text": "💸 انتقال موجودی", "callback_data": "wallet_transfer"}],
+                [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}],
             ]
         }
         send_message(
@@ -2112,6 +2145,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                     {"text": "👛 تغییر کیف پول", "callback_data": f"adm_u_wallet:{target_uid}"},
                     {"text": blk_btn_txt, "callback_data": f"adm_u_botblock:{target_uid}"},
                 ])
+                kb_rows.append([{"text": "📜 گزارش تراکنش‌ها", "callback_data": f"adm_u_ledger:{target_uid}"}])
             if target_uname:
                 try:
                     pu = panel_request(env, f"/api/user/{urllib.parse.quote(target_uname)}")
@@ -2824,6 +2858,49 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         record_reseller_sale(user_id, -refund_gb, count=-1)
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ حذف و برگشت وجه انجام شد"})
         edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(un)}</code> حذف شد و مبلغ <b>{refund_amt:,} تومان</b> به کیف پول شما برگشت.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>")
+        return
+
+    if data == "wallet_ledger" or data.startswith("adm_u_ledger:"):
+        target_uid = int(data.split(":", 1)[1]) if data.startswith("adm_u_ledger:") else user_id
+        if data.startswith("adm_u_ledger:") and user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        with users_file_lock(USERS_PATH):
+            entries = load_json(LEDGER_PATH).get(str(target_uid), [])
+        if not entries:
+            send_message(token, chat_id, "📭 هنوز تراکنشی برای این حساب ثبت نشده است.", env=env, user_id=user_id)
+            return
+        lines = [f"📜 <b>گزارش تراکنش‌های حساب <code>{target_uid}</code> (۱۵ مورد آخر):</b>\n"]
+        for e in reversed(entries[-15:]):
+            dt_s = (datetime.fromtimestamp(int(e["ts"]), timezone.utc) + timedelta(hours=3, minutes=30)).strftime("%m-%d %H:%M")
+            d = int(e["delta"])
+            sign = "+" if d > 0 else ""
+            lines.append(f"• <code>{dt_s}</code> | <b>{sign}{d:,}</b> ت | مانده: <code>{int(e['balance']):,}</code> | {html.escape(str(e.get('note', '')))}")
+        send_message(token, chat_id, "\n".join(lines), env=env, user_id=user_id)
+        return
+
+    if data in ("adm_nodes", "res_nodes"):
+        if data == "adm_nodes" and user_id not in get_admin_ids(env):
+            return
+        if data == "res_nodes" and not get_reseller(user_id):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        try:
+            nodes = panel_request(env, "/api/nodes?limit=100").get("nodes", [])
+            mask_ip = (data == "res_nodes") or is_tenant_bot(env)
+            online = sum(1 for n in nodes if n.get("status") == "connected")
+            lines = [f"📡 <b>وضعیت سرورها</b> (🟢 {online} آنلاین از {len(nodes)})\n"]
+            for idx, n in enumerate(nodes, 1):
+                name = str(n.get("name") or f"Server {idx}")
+                if mask_ip:
+                    name = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "***", name).strip()
+                    if not name or name == "***":
+                        name = f"سرور #{idx}"
+                ic = "🟢 آنلاین" if n.get("status") == "connected" else f"🔴 {n.get('status') or 'قطع'}"
+                lines.append(f"• <b>{html.escape(name)}</b>: {ic}")
+            send_message(token, chat_id, "\n".join(lines), env=env, user_id=user_id)
+        except Exception as e:
+            send_message(token, chat_id, f"❌ خطا در دریافت وضعیت سرورها: {html.escape(str(e))}", env=env, user_id=user_id)
         return
 
     if data == "wallet_transfer":
