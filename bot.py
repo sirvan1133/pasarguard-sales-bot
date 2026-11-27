@@ -69,16 +69,16 @@ panel_token_cache: dict = {"token": "", "ts": 0.0}
 user_states: dict[int, dict] = {}
 bot_info_cache: dict = {"username": ""}
 
-BTN_BUY = "🛒 خرید اشتراک"
-BTN_RENEW = "🔄 تمدید اشتراک"
+BTN_BUY = "🔐 خرید اشتراک"
+BTN_RENEW = "♻️ تمدید سرویس"
 BTN_TRIAL = "🎁 تست رایگان"
-BTN_MY_SUBS = "📦 اشتراک‌های من"
-BTN_WALLET = "👛 کیف پول"
+BTN_MY_SUBS = "🛍 سرویس های من"
+BTN_WALLET = "💰 کیف پول"
 BTN_CHECK = "📊 استعلام اشتراک"
-BTN_REFERRAL = "🤝 دعوت دوستان"
-BTN_SUPPORT = "👨‍💻 پشتیبانی"
+BTN_REFERRAL = "👥 معرفی به دوستان"
+BTN_SUPPORT = "☎️ پشتیبانی"
 BTN_RESELLER = "💼 پنل نمایندگی"
-BTN_HELP = "❓ راهنما"
+BTN_HELP = "📚 آموزش"
 BTN_ADMIN = "👑 پنل ادمین"
 
 
@@ -131,15 +131,45 @@ def get_admin_ids(env: dict[str, str]) -> set[int]:
 
 def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
     rows = [
-        [{"text": BTN_BUY}, {"text": BTN_RENEW}],
-        [{"text": BTN_TRIAL}, {"text": BTN_MY_SUBS}],
-        [{"text": BTN_WALLET}, {"text": BTN_CHECK}],
-        [{"text": BTN_RESELLER}, {"text": BTN_REFERRAL}],
-        [{"text": BTN_SUPPORT}, {"text": BTN_HELP}],
+        [{"text": BTN_BUY}],
+        [{"text": BTN_RENEW}, {"text": BTN_MY_SUBS}],
+        [{"text": BTN_WALLET}, {"text": BTN_HELP}],
+        [{"text": BTN_REFERRAL}, {"text": BTN_SUPPORT}],
+        [{"text": BTN_TRIAL}, {"text": BTN_RESELLER}],
     ]
     if user_id in get_admin_ids(env):
-        rows.append([{"text": BTN_ADMIN}])
+        rows.append([{"text": BTN_CHECK}, {"text": BTN_ADMIN}])
+    else:
+        rows.append([{"text": BTN_CHECK}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
+
+
+def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
+    is_res = bool(get_reseller(user_id)) or (is_tenant_bot(env) and user_id in get_admin_ids(env))
+    res_lbl = "💼 پنل نمایندگی" if is_res else "🤝 درخواست نمایندگی"
+    rows = [
+        [{"text": "🛒 خرید سرویس جدید", "callback_data": "home:buy", "style": "success"}],
+        [
+            {"text": "♻️ تمدید سرویس", "callback_data": "home:renew"},
+            {"text": "📲 سرویس های من", "callback_data": "home:subs"},
+        ],
+        [
+            {"text": "💰 اعتبار من", "callback_data": "home:wallet"},
+            {"text": "💡 آموزش استفاده", "callback_data": "conn_guide"},
+        ],
+        [
+            {"text": "👥 معرفی به دوستان", "callback_data": "home:ref"},
+            {"text": "👨‍💻 تماس با پشتیبانی", "callback_data": "home:support"},
+        ],
+        [
+            {"text": "🎁 تست رایگان", "callback_data": "home:trial"},
+            {"text": "📊 استعلام اشتراک", "callback_data": "home:check"},
+        ],
+        [{"text": res_lbl, "callback_data": "res_panel", "style": "danger"}],
+    ]
+    if user_id in get_admin_ids(env):
+        rows.append([{"text": "👑 پنل ادمین", "callback_data": "adm_open", "style": "primary"}])
+    return {"inline_keyboard": rows}
 
 
 def load_json(path: Path) -> dict:
@@ -665,6 +695,18 @@ def tg_send_photo(token: str, chat_id: int, photo_path: Path, caption: str = "",
         return json.loads(resp.read().decode("utf-8")).get("result")
 
 
+def _strip_button_styles(markup: dict) -> dict:
+    if not isinstance(markup, dict) or "inline_keyboard" not in markup:
+        return markup
+    return {
+        **markup,
+        "inline_keyboard": [
+            [{k: v for k, v in btn.items() if k != "style"} for btn in row]
+            for row in markup["inline_keyboard"]
+        ],
+    }
+
+
 def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None = None, env: dict[str, str] | None = None, user_id: int | None = None) -> dict | None:
     markup = reply_markup
     if markup is None and env is not None and user_id is not None:
@@ -677,7 +719,13 @@ def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None 
     }
     if markup is not None:
         payload["reply_markup"] = markup
-    return tg_api(token, "sendMessage", payload, timeout=15).get("result")
+    try:
+        return tg_api(token, "sendMessage", payload, timeout=15).get("result")
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and markup and "inline_keyboard" in markup:
+            payload["reply_markup"] = _strip_button_styles(markup)
+            return tg_api(token, "sendMessage", payload, timeout=15).get("result")
+        raise
 
 
 def edit_message(token: str, chat_id: int, message_id: int, text: str, reply_markup: dict | None = None) -> None:
@@ -1922,12 +1970,12 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 send_message(token, chat_id, "⛔ حساب شما توسط مدیریت مسدود شده است.")
             return
 
-    if t in ("/help", BTN_HELP, "/guide"):
+    if t in ("/help", BTN_HELP, "/guide", "❓ راهنما"):
         user_states.pop(user_id, None)
         send_connection_guide(token, chat_id, env, user_id)
         return
 
-    if t == BTN_WALLET or t == "/wallet":
+    if t in (BTN_WALLET, "/wallet", "👛 کیف پول"):
         user_states.pop(user_id, None)
         if is_tenant_bot(env) and user_id in get_admin_ids(env):
             up_bal = get_upstream_balance(env) or 0
@@ -1966,12 +2014,12 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         )
         return
 
-    if t == BTN_RESELLER or t == "/reseller":
+    if t in (BTN_RESELLER, "/reseller", "🤝 پنل نمایندگی"):
         user_states.pop(user_id, None)
         show_reseller_panel(token, chat_id, env, user_id)
         return
 
-    if t == BTN_SUPPORT or t == "/support":
+    if t in (BTN_SUPPORT, "/support", "👨\u200d💻 پشتیبانی"):
         user_states[user_id] = {"step": "await_support"}
         send_message(
             token,
@@ -1989,12 +2037,15 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             chat_id,
             f"👋 <b>به ربات فروش اشتراک خوش آمدید</b>\n\n"
             f"🆔 آیدی عددی شما (برای کپی لمس کنید): <code>{user_id}</code>\n\n"
-            "• برای خرید از دکمهٔ <b>🛒 خرید اشتراک</b> استفاده کنید.\n"
-            "• پرداخت با <b>کارت‌به‌کارت</b> و <b>تتر (BEP20 - تایید خودکار)</b> با نرخ لحظه‌ای.\n"
-            "• هر هفته یک‌بار امکان دریافت <b>🎁 تست رایگان</b> دارید.\n"
-            "• با <b>🤝 دعوت دوستان</b> از هر خرید موفق دوستانتان کد تخفیف هدیه بگیرید!",
+            "از منوی شیشه‌ای یا دکمه‌های زیر انتخاب کنید:",
             env=env,
             user_id=user_id,
+        )
+        send_message(
+            token,
+            chat_id,
+            "📌 <b>منوی دسترسی سریع:</b>",
+            reply_markup=build_home_inline_keyboard(user_id, env),
         )
         return
 
@@ -2078,7 +2129,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             send_message(token, chat_id, f"❌ خطا در ساخت تست رایگان: {html.escape(str(e))}", env=env, user_id=user_id)
         return
 
-    if t == BTN_REFERRAL or t == "/ref":
+    if t in (BTN_REFERRAL, "/ref", "🤝 دعوت دوستان"):
         user_states.pop(user_id, None)
         cfg = get_settings(env)
         pct = cfg.get("referral_reward_pct", 20.0)
@@ -2106,7 +2157,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         )
         return
 
-    if t == BTN_BUY or t == "/buy":
+    if t in (BTN_BUY, "/buy", "🛒 خرید اشتراک"):
         user_states.pop(user_id, None)
         if not check_maintenance(token, env, chat_id, user_id):
             return
@@ -2115,7 +2166,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         send_message(token, chat_id, "📦 <b>مرحله ۱:</b> حجم مورد نظر (به گیگابایت) را انتخاب کنید:", reply_markup=build_gb_keyboard("buy"))
         return
 
-    if t == BTN_RENEW or t == "/renew":
+    if t in (BTN_RENEW, "/renew", "🔄 تمدید اشتراک"):
         user_states.pop(user_id, None)
         if not check_maintenance(token, env, chat_id, user_id):
             return
@@ -2141,7 +2192,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         )
         return
 
-    if t == BTN_MY_SUBS:
+    if t in (BTN_MY_SUBS, "📦 اشتراک‌های من"):
         user_states.pop(user_id, None)
         orders = load_json(ORDERS_PATH)
         mine = [o for o in orders.values() if o.get("user_id") == user_id and o.get("status") == "approved" and o.get("panel_username")]
@@ -2701,7 +2752,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 send_message(token, chat_id, f"❌ خطا در استعلام: {html.escape(str(e))}", env=env, user_id=user_id)
             return
 
-    send_message(token, chat_id, "برای شروع خرید یا مشاهدهٔ قیمت‌ها از دکمه‌های زیر استفاده کنید:", env=env, user_id=user_id)
+    send_message(token, chat_id, "❌ دستور یافت نشد، از منوی زیر انتخاب کنید:", reply_markup=build_home_inline_keyboard(user_id, env))
 
 
 def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
@@ -2721,6 +2772,24 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             txt_b = f"حساب شما تا {max(1, (rem + 3599)//3600)} ساعت دیگر مسدود است" if rem > 0 else "حساب شما توسط مدیریت مسدود است"
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": txt_b, "show_alert": True})
             return
+
+    if data.startswith("home:") or data == "adm_open":
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        cmd_map = {
+            "home:buy": BTN_BUY,
+            "home:renew": BTN_RENEW,
+            "home:subs": BTN_MY_SUBS,
+            "home:wallet": BTN_WALLET,
+            "home:ref": BTN_REFERRAL,
+            "home:support": BTN_SUPPORT,
+            "home:trial": BTN_TRIAL,
+            "home:check": BTN_CHECK,
+            "adm_open": BTN_ADMIN,
+        }
+        mapped = cmd_map.get(data)
+        if mapped:
+            handle_text(token, env, {"chat": {"id": chat_id}, "from": cb["from"], "text": mapped})
+        return
 
     if data == "buy_restart":
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
