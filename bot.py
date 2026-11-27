@@ -941,8 +941,14 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     coupons = load_json(COUPONS_PATH)
     pending = sum(1 for o in orders.values() if o.get("status") == "pending")
     approved = [o for o in orders.values() if o.get("status") == "approved"]
+    bot_subs = len({o.get("panel_username") for o in approved if o.get("panel_username")})
     total_tmn = sum(int(o.get("total_toman", 0)) for o in approved)
     cfg = get_settings(env)
+    try:
+        sys_info = panel_request(env, "/api/system")
+        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 🟢 فعال پنل: <b>{int(sys_info.get('active_users', 0)):,}</b> | 🌐 آنلاین: <b>{int(sys_info.get('online_users', 0)):,}</b>"
+    except Exception:
+        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b>"
     try:
         rate = get_usdt_toman_rate()
         rate_s = f"{rate:,} تومان"
@@ -956,6 +962,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     txt = (
         "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
         f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
+        f"{panel_stats_s}\n"
         f"⏳ سفارش‌های در انتظار: <b>{pending}</b> | ✅ تاییدشده: <b>{len(approved)}</b>\n"
         f"💰 فروش کل: <b>{total_tmn:,} تومان</b>\n"
         f"💵 نرخ لحظه‌ای تتر: <code>{rate_s}</code>\n\n"
