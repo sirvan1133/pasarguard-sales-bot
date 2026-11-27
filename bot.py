@@ -2910,8 +2910,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         with users_lock:
             users = load_json(USERS_PATH)
             u_rec = users.setdefault(str(target_uid), {"first_seen": int(time.time()), "last_seen": int(time.time())})
+            fake_count = int(u_rec.get("fake_count") or 0) + 1
+            u_rec["fake_count"] = fake_count
             u_rec["blocked"] = True
-            u_rec["blocked_until"] = int(time.time()) + 86400
+            u_rec["blocked_until"] = (int(time.time()) + 86400) if fake_count == 1 else 0
             save_json(USERS_PATH, users)
 
         action_note = ""
@@ -2930,9 +2932,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
         except Exception:
             pass
-        send_message(token, chat_id, f"🚫 سفارش <code>#{order_id}</code> به عنوان فیش جعلی ثبت شد.\n• {action_note}\n• کاربر <code>{target_uid}</code> به مدت <b>۲۴ ساعت (۱ روز)</b> مسدود گردید.")
+        if fake_count == 1:
+            blk_adm = "به مدت <b>۲۴ ساعت (۱ روز)</b> مسدود گردید (تکرار اول)."
+            blk_usr = "به مدت <b>۲۴ ساعت</b> مسدود شد."
+        else:
+            blk_adm = f"به دلیل تکرار (دفعهٔ <b>{fake_count}</b>) <b>به‌صورت دائمی</b> مسدود گردید تا زمانی که دستی رفع مسدودیت کنید."
+            blk_usr = "به دلیل تکرار ارسال رسید نامعتبر، <b>به‌صورت دائمی</b> مسدود شد."
+        send_message(token, chat_id, f"🚫 سفارش <code>#{order_id}</code> به عنوان فیش جعلی ثبت شد.\n• {action_note}\n• کاربر <code>{target_uid}</code> {blk_adm}")
         try:
-            send_message(token, target_uid, f"🚫 سفارش <code>#{order_id}</code> به دلیل عدم تایید واریز لغو، اشتراک شما قطع و دسترسی شما به مدت <b>۲۴ ساعت</b> مسدود شد.")
+            send_message(token, target_uid, f"🚫 سفارش <code>#{order_id}</code> به دلیل عدم تایید واریز لغو، اشتراک شما قطع و دسترسی شما {blk_usr}")
         except Exception:
             pass
         return
