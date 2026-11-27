@@ -154,7 +154,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict:
         ln = int(self.headers.get("Content-Length", "0") or 0)
-        if ln <= 0 or ln > 262144:
+        if ln <= 0 or ln > 8 * 1024 * 1024:
             return {}
         return json.loads(self.rfile.read(ln).decode("utf-8"))
 
@@ -218,6 +218,11 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     "balance": bot.get_wallet_balance(uid),
                 },
                 "settings": {"gb_options": cfg.get("gb_options", bot.DEFAULT_GB_OPTIONS)},
+                "payment": {
+                    "card_number": str(cfg.get("card_number") or ""),
+                    "card_owner": str(cfg.get("card_owner") or ""),
+                    "usdt_bep20": str(cfg.get("usdt_bep20") or ""),
+                },
                 "subs": fetch_user_subs(env, uid),
                 "tickets": get_user_tickets(uid),
                 "referral_link": f"https://t.me/{bot_u}?start=ref_{uid}",
@@ -326,6 +331,83 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 inv_id=inv_id,
             )
             return self._send_json(200, {"ok": True})
+
+        if path == "/vpnapp/api/submit_receipt":
+            import base64
+            gb = max(1, min(5000, int(body.get("gb") or 30)))
+            months = max(1, min(24, int(body.get("months") or 1)))
+            target_un = str(body.get("target_username") or "").strip()
+            coupon = str(body.get("coupon") or "").strip().upper()
+            method = str(body.get("method") or "card")
+            note = str(body.get("note") or "").strip()[:1000]
+            photo_b64 = str(body.get("photo_b64") or "").strip()
+            if not note and not photo_b64:
+                return self._send_json(400, {"error": "لطفاً عکس رسید یا کد پیگیری را وارد کنید"})
+            cpct = 0.0
+            if coupon:
+                cp = bot.load_json(bot.COUPONS_PATH).get(coupon)
+                if cp and cp.get("active", True):
+                    cpct = float(cp.get("percent", 0))
+            p = bot.calc_price(gb, months, env=env, is_renew=bool(target_un), coupon_pct=cpct)
+            oid = secrets.token_hex(4).upper()
+            orders = bot.load_json(bot.ORDERS_PATH)
+            orders[oid] = {
+                "id": oid,
+                "user_id": uid,
+                "username": u.get("username", ""),
+                "type": "renew" if target_un else "buy",
+                "target_username": target_un,
+                "gb": gb,
+                "months": months,
+                "total_toman": int(p["total_toman"]),
+                "usdt_amount": p["usdt_amount"],
+                "pay_method": f"{method}_miniapp",
+                "status": "pending",
+                "note": note,
+                "created_at": int(time.time()),
+            }
+            bot.save_json(bot.ORDERS_PATH, orders)
+            type_lbl = f"🔄 تمدید (<code>{html.escape(target_un)}</code>)" if target_un else "🛒 خرید جدید (مینی‌اپ)"
+            m_lbl = "🪙 تتر (BEP20)" if method == "usdt" else "💳 کارت‌به‌کارت"
+            cap = (
+                f"🆕 <b>سفارش جدید #{oid}</b>\n\n"
+                f"📌 نوع: {type_lbl}\n"
+                f"👤 کاربر: <code>{uid}</code> (@{html.escape(u.get('username') or '-')})\n"
+                f"📦 پلن: <b>{gb} گیگ / {months} ماه</b>\n"
+                f"💰 روش: {m_lbl}\n"
+                f"💵 مبلغ: <b>{p['total_toman']:,} تومان</b> (<code>{p['usdt_amount']} USDT</code>)"
+            )
+            if note:
+                cap += f"\n\n📝 پیام/کد پیگیری:\n<code>{html.escape(note)}</code>"
+            kb = {
+                "inline_keyboard": [[
+                    {"text": "✅ تایید و ساخت خودکار", "callback_data": f"adm_ok:{oid}", "style": "success"},
+                    {"text": "❌ رد سفارش", "callback_data": f"adm_no:{oid}", "style": "danger"},
+                ]]
+            }
+            tmp_p = None
+            if photo_b64:
+                try:
+                    raw_b64 = photo_b64.split(",", 1)[-1]
+                    img_bytes = base64.b64decode(raw_b64)
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                        tf.write(img_bytes)
+                        tmp_p = Path(tf.name)
+                except Exception:
+                    tmp_p = None
+            try:
+                for adm_id in bot.get_admin_ids(env):
+                    try:
+                        if tmp_p is not None:
+                            bot.tg_send_photo(token, adm_id, tmp_p, caption=cap, reply_markup=kb)
+                        else:
+                            bot.send_message(token, adm_id, cap, reply_markup=kb)
+                    except Exception:
+                        pass
+            finally:
+                if tmp_p is not None:
+                    tmp_p.unlink(missing_ok=True)
+            return self._send_json(200, {"ok": True, "order_id": oid, "message": f"سفارش #{oid} ثبت و برای تایید ارسال شد"})
 
         if path == "/vpnapp/api/trial":
             bot.handle_text(token, env, {"chat": {"id": uid}, "from": u, "text": "/trial"})

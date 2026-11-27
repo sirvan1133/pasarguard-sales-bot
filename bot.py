@@ -144,14 +144,18 @@ def set_user_menu_mode(user_id: int, mode: str) -> None:
 def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
     if get_user_menu_mode(user_id, env) == "inline":
         return {"remove_keyboard": True}
-    rows = [
+    miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
+    rows = []
+    if miniapp_url and not is_tenant_bot(env):
+        rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}}])
+    rows.extend([
         [{"text": BTN_BUY}],
         [{"text": BTN_RENEW}, {"text": BTN_MY_SUBS}],
         [{"text": BTN_WALLET}, {"text": BTN_HELP}],
         [{"text": BTN_REFERRAL}, {"text": BTN_SUPPORT}],
         [{"text": BTN_TRIAL}, {"text": BTN_RESELLER}],
         [{"text": BTN_CHECK}],
-    ]
+    ])
     if user_id in get_admin_ids(env):
         rows.append([{"text": BTN_ADMIN}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
@@ -4474,6 +4478,18 @@ def main() -> None:
         )
     except Exception as e:
         log.warning("setMyCommands failed: %s", e)
+
+    miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
+    if miniapp_url and not is_tenant_bot(env):
+        try:
+            tg_api(
+                token,
+                "setChatMenuButton",
+                {"menu_button": {"type": "web_app", "text": "🚀 پنل کاربری", "web_app": {"url": miniapp_url}}},
+                timeout=10,
+            )
+        except Exception as e:
+            log.warning("setChatMenuButton failed: %s", e)
 
     threading.Thread(target=expiry_reminder_loop, args=(token, env), daemon=True).start()
     threading.Thread(target=backup_and_report_loop, args=(token, env), daemon=True).start()

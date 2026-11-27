@@ -318,9 +318,24 @@
         </div>
         <button id="btnBuyWallet" class="btn btn-success" style="margin-bottom:8px" onclick="payWallet()">👛 پرداخت آنی از کیف پول</button>
         <div class="btn-row">
-          <button class="btn btn-primary" onclick="createOrder('card')">💳 کارت‌به‌کارت</button>
-          <button class="btn" onclick="createOrder('usdt')">🪙 تتر (BEP20)</button>
+          <button class="btn btn-primary" onclick="openPayBox('card')">💳 کارت‌به‌کارت</button>
+          <button class="btn" onclick="openPayBox('usdt')">🪙 تتر (BEP20)</button>
         </div>
+      </div>
+
+      <div id="payBox" class="card" style="display:none">
+        <div class="card-title">
+          <span id="payBoxTitle">💳 پرداخت کارت‌به‌کارت</span>
+          <button class="btn btn-sm" onclick="document.getElementById('payBox').style.display='none'">بستن</button>
+        </div>
+        <div id="payInfoBox" class="stat-box" style="margin-bottom:10px;line-height:1.8"></div>
+        <div id="receiptPhotoWrap">
+          <label>📸 عکس فیش واریزی (اختیاری اگر کد پیگیری می‌نویسید):</label>
+          <input id="receiptFile" type="file" accept="image/*" />
+        </div>
+        <label id="receiptNoteLbl">📝 کد پیگیری یا ۴ رقم آخر کارت:</label>
+        <input id="receiptNote" placeholder="کد پیگیری یا توضیحات..." />
+        <button id="btnSubmitReceipt" class="btn btn-success" style="margin-top:10px" onclick="submitReceipt()">📤 ارسال رسید و ثبت سفارش</button>
       </div>
     </div>
 
@@ -424,7 +439,7 @@
     if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#0b1020'); tg.setBackgroundColor('#0b1020'); } catch(e){} }
 
     const initData = tg?.initData || '';
-    let state = { user: {}, settings: {}, subs: [], tickets: [], gb: 30, months: 1, renewTarget: '', activeTicketId: null };
+    let state = { user: {}, settings: {}, payment: {}, subs: [], tickets: [], gb: 30, months: 1, renewTarget: '', activeTicketId: null, payMethod: 'card', lastPrice: { total_toman: 0, usdt_amount: 0 } };
 
     function showToast(msg) {
       const el = document.getElementById('toast');
@@ -458,7 +473,7 @@
     async function loadBootstrap() {
       try {
         const d = await api('bootstrap');
-        state.user = d.user; state.settings = d.settings; state.subs = d.subs || []; state.tickets = d.tickets || [];
+        state.user = d.user; state.settings = d.settings; state.payment = d.payment || {}; state.subs = d.subs || []; state.tickets = d.tickets || [];
         document.getElementById('uName').innerText = d.user.first_name || 'کاربر گرامی';
         document.getElementById('uAvatar').innerText = (d.user.first_name || 'V')[0].toUpperCase();
         document.getElementById('uIdCopy').innerText = `🆔 آیدی: ${d.user.id} (کپی)`;
@@ -496,6 +511,7 @@
       try {
         const coupon = document.getElementById('couponInput').value.trim();
         const p = await api('calc', 'POST', { gb: state.gb, months: state.months, is_renew: !!state.renewTarget, coupon });
+        state.lastPrice = p;
         document.getElementById('priceTmn').innerText = `${p.total_toman.toLocaleString()} تومان`;
         document.getElementById('priceUsdt').innerText = `${p.usdt_amount} USDT`;
         const btnW = document.getElementById('btnBuyWallet');
@@ -514,13 +530,72 @@
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
-    async function createOrder(method) {
+    function openPayBox(method) {
+      state.payMethod = method;
+      const box = document.getElementById('payBox');
+      const info = document.getElementById('payInfoBox');
+      const photoWrap = document.getElementById('receiptPhotoWrap');
+      if (method === 'card') {
+        document.getElementById('payBoxTitle').innerText = '💳 پرداخت کارت‌به‌کارت';
+        document.getElementById('receiptNoteLbl').innerText = '📝 کد پیگیری یا ۴ رقم آخر کارت:';
+        photoWrap.style.display = 'block';
+        const cnum = state.payment.card_number || 'ثبت نشده';
+        const cown = state.payment.card_owner || '';
+        info.innerHTML = `
+          <div>مبلغ قابل پرداخت: <strong>${(state.lastPrice.total_toman || 0).toLocaleString()} تومان</strong></div>
+          <div>شماره کارت: <strong dir="ltr">${cnum}</strong> <button class="btn btn-sm" style="margin-right:6px" onclick="copyText('${cnum}')">📋 کپی</button></div>
+          <div>به نام: <strong>${cown}</strong></div>`;
+      } else {
+        document.getElementById('payBoxTitle').innerText = '🪙 پرداخت تتر (BEP20)';
+        document.getElementById('receiptNoteLbl').innerText = '🔗 هش تراکنش (TXID 0x...):';
+        photoWrap.style.display = 'none';
+        const w = state.payment.usdt_bep20 || 'ثبت نشده';
+        info.innerHTML = `
+          <div>مبلغ قابل پرداخت: <strong>${state.lastPrice.usdt_amount || 0} USDT</strong></div>
+          <div style="word-break:break-all">آدرس ولت BEP20: <strong dir="ltr">${w}</strong></div>
+          <button class="btn btn-sm btn-primary" style="margin-top:6px" onclick="copyText('${w}')">📋 کپی آدرس ولت</button>`;
+      }
+      box.style.display = 'block';
+      box.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = reject;
+        fr.readAsDataURL(file);
+      });
+    }
+
+    async function submitReceipt() {
+      const btn = document.getElementById('btnSubmitReceipt');
+      const note = document.getElementById('receiptNote').value.trim();
+      const fileInput = document.getElementById('receiptFile');
+      const file = fileInput.files && fileInput.files[0];
+      if (!note && !file) return showToast('عکس رسید یا کد پیگیری را وارد کنید');
+      btn.disabled = true;
+      btn.innerText = '⏳ در حال ارسال...';
       try {
+        let photo_b64 = '';
+        if (file && state.payMethod === 'card') {
+          photo_b64 = await readFileAsDataUrl(file);
+        }
         const coupon = document.getElementById('couponInput').value.trim();
-        const res = await api('create_order', 'POST', { gb: state.gb, months: state.months, target_username: state.renewTarget, coupon, method });
-        showToast('📩 اطلاعات پرداخت در چت ربات ارسال شد');
-        if (tg) setTimeout(() => tg.close(), 900);
-      } catch (e) { showToast('❌ ' + e.message); }
+        const res = await api('submit_receipt', 'POST', {
+          gb: state.gb, months: state.months, target_username: state.renewTarget,
+          coupon, method: state.payMethod, note, photo_b64
+        });
+        document.getElementById('receiptNote').value = '';
+        fileInput.value = '';
+        document.getElementById('payBox').style.display = 'none';
+        showToast('✅ ' + res.message);
+      } catch (e) {
+        showToast('❌ ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '📤 ارسال رسید و ثبت سفارش';
+      }
     }
 
     function renderSubs() {
