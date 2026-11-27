@@ -410,6 +410,13 @@ class MiniAppHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self):
+        try:
+            self._handle_post()
+        except Exception as e:
+            log.exception("Unhandled POST error")
+            self._send_json(500, {"error": f"خطای داخلی سرور: {e}"})
+
+    def _handle_post(self):
         env = bot.load_env()
         u, is_demo = self._auth_user(env)
         if not u:
@@ -581,17 +588,19 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             ok_ded, new_bal = bot.adjust_wallet(uid, -cost, f"خرید/تمدید از مینی‌اپ ({gb}GB/{months}M)")
             if not ok_ded:
                 return self._send_json(400, {"error": "خطا در کسر موجودی"})
+            oid = secrets.token_hex(4).upper()
             try:
                 if target_un:
                     pu = bot.renew_panel_user(env, target_un, gb, months)
                     sub_url = pu.get("subscription_url") or ""
                     uname = target_un
                 else:
-                    uname, sub_url = bot.create_panel_user(env, gb, months, uid)
+                    pu = bot.create_panel_user(env, oid, uid, gb, months, "wallet_miniapp")
+                    uname = pu["username"]
+                    sub_url = pu.get("subscription_url") or ""
             except Exception as e:
                 bot.adjust_wallet(uid, cost, "برگشت وجه خطای ساخت از مینی‌اپ")
                 return self._send_json(500, {"error": f"خطا در پنل: {e}"})
-            oid = secrets.token_hex(4).upper()
             orders = bot.load_json(bot.ORDERS_PATH)
             orders[oid] = {
                 "id": oid, "user_id": uid, "username": u.get("username", ""),
