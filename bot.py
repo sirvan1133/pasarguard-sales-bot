@@ -2825,7 +2825,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
     if data == "home_back":
         user_states.pop(user_id, None)
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
-        handle_text(token, env, {"chat": {"id": chat_id}, "from": cb["from"], "text": "/start"})
+        mode = get_user_menu_mode(user_id, env)
+        if mode in ("both", "inline"):
+            if cb.get("message", {}).get("text"):
+                edit_message(token, chat_id, msg_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
+            else:
+                send_message(token, chat_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
+        else:
+            send_message(token, chat_id, "🏠 <b>منوی اصلی:</b>", env=env, user_id=user_id)
         return
 
     if data == "menu_mode":
