@@ -913,8 +913,9 @@ def show_invoice(
     pay_rows = []
     if bal >= p["total_toman"]:
         pay_rows.append([{"text": f"👛 پرداخت آنی از کیف پول (موجودی: {bal:,} ت)", "callback_data": f"pay:wallet:{inv_id}"}])
+    card_lbl = "💳 پرداخت کارت‌به‌کارت (فعال‌سازی آنی)" if get_settings(env).get("card_instant_mode", "all") != "off" else "💳 پرداخت کارت‌به‌کارت"
     pay_rows.extend([
-        [{"text": "💳 پرداخت کارت‌به‌کارت", "callback_data": f"pay:card:{inv_id}"}],
+        [{"text": card_lbl, "callback_data": f"pay:card:{inv_id}"}],
         [{"text": "🪙 پرداخت تتر (BEP20 - تایید خودکار)", "callback_data": f"pay:usdt:{inv_id}"}],
         [{"text": "🎟 اعمال کد تخفیف", "callback_data": f"coupon:{inv_id}"}],
         [{"text": "🔙 تغییر مدت", "callback_data": f"{prefix}_gb:{gb}"}],
@@ -1905,13 +1906,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {"step": "await_receipt", "is_topup": True, "topup_toman": amt, "card_toman": card_amt, "pay_method": method}
         if method == "card":
+            instant_note = "⚡ پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید تا کیف پول شما <b>بلافاصله و خودکار</b> شارژ شود:" if cfg.get("card_instant_mode", "all") != "off" else "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
             txt = (
-                "💳 <b>شارژ کیف پول (کارت‌به‌کارت)</b>\n\n"
+                "💳 <b>شارژ کیف پول (کارت‌به‌کارت — آنی و خودکار)</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
                 f"به نام: <b>{html.escape(str(cfg['card_owner']))}</b>\n"
                 f"مبلغ دقیق و یکتا: <code>{card_amt:,}</code> تومان\n"
                 "<i>(عدد رندوم برای شناسایی خودکار واریز شما اضافه شده است)</i>\n\n"
-                "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
+                f"{instant_note}"
             )
         else:
             txt = (
@@ -2065,13 +2067,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "card_toman": card_amt,
         }
         if method == "card":
+            instant_note = "⚡ پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید تا اشتراک شما <b>بلافاصله و خودکار</b> فعال شود:" if cfg.get("card_instant_mode", "all") != "off" else "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
             txt = (
-                "💳 <b>پرداخت کارت‌به‌کارت</b>\n\n"
+                "💳 <b>پرداخت کارت‌به‌کارت (فعال‌سازی آنی و خودکار)</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
                 f"به نام: <b>{html.escape(str(cfg['card_owner']))}</b>\n"
                 f"مبلغ دقیق و یکتا: <code>{card_amt:,}</code> تومان\n"
                 "<i>(عدد رندوم برای شناسایی خودکار واریز شما اضافه شده است)</i>\n\n"
-                "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
+                f"{instant_note}"
             )
         else:
             txt = (
