@@ -2834,7 +2834,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             subprocess.run([sys.executable, "-m", "py_compile", str(tmp_path)], check=True, timeout=10)
             os.replace(tmp_path, cur_path)
             os.chmod(cur_path, 0o700)
-            send_message(token, chat_id, "✅ آخرین نسخه از گیت‌هاب دریافت و کامپایل شد. در حال ری‌استارت ربات...", env=env, user_id=user_id)
+            meta = load_json(META_PATH)
+            meta["pending_update_notify"] = {"chat_id": chat_id, "user_id": user_id}
+            save_json(META_PATH, meta)
+            send_message(token, chat_id, "⏳ آخرین نسخه از گیت‌هاب دریافت و کامپایل شد. در حال ری‌استارت...", env=env, user_id=user_id)
             try:
                 ack = tg_api(token, "getUpdates", {"offset": -1, "limit": 1, "timeout": 0}, timeout=5).get("result", [])
                 if ack:
@@ -3163,6 +3166,21 @@ def main() -> None:
 
     threading.Thread(target=expiry_reminder_loop, args=(token, env), daemon=True).start()
     threading.Thread(target=backup_and_report_loop, args=(token, env), daemon=True).start()
+
+    meta = load_json(META_PATH)
+    upd_notify = meta.pop("pending_update_notify", None)
+    if upd_notify:
+        save_json(META_PATH, meta)
+        try:
+            send_message(
+                token,
+                upd_notify["chat_id"],
+                "✅ <b>آپدیت کامل شد!</b> ربات با آخرین نسخهٔ گیت‌هاب راه‌اندازی و آماده است.",
+                env=env,
+                user_id=upd_notify["user_id"],
+            )
+        except Exception as e:
+            log.warning("Failed to send post-update notice: %s", e)
 
     offset = 0
     log.info("Sales bot starting...")
