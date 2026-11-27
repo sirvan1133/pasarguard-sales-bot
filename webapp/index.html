@@ -749,10 +749,11 @@
               <button class="btn btn-sm btn-primary" onclick="openQr('${s.sub_url}')">📱 QR و لینک</button>
               <button class="btn btn-sm" onclick="startRenew('${s.username}')">🔄 تمدید</button>
             </div>
-            ${s.sub_url ? `<div class="btn-row" style="margin-top:6px">
+            ${s.sub_url ? `<div class="btn-row" style="margin-top:6px;flex-wrap:wrap">
               <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('hiddify','${s.sub_url}')">📲 Hiddify</button>
               <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('v2rayng','${s.sub_url}')">⚡ v2rayNG</button>
               <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('streisand','${s.sub_url}')">🍎 Streisand</button>
+              <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('v2box','${s.sub_url}')">📦 V2Box</button>
             </div>` : ''}
           </div>`;
       }).join('');
@@ -784,6 +785,7 @@
         hiddify: `hiddify://import/${enc}`,
         v2rayng: `v2rayng://install-config?url=${enc}`,
         streisand: `streisand://import/${enc}`,
+        v2box: `v2box://install-sub?url=${enc}&name=VPN_VIP`,
       };
       if (links[app]) window.location.href = links[app];
     }
