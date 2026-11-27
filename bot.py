@@ -262,6 +262,10 @@ def get_settings(env: dict[str, str]) -> dict:
         "maintenance_mode": False,
         "maintenance_msg": "🛠 ربات در حال بروزرسانی و نگهداری سرورهاست. لطفاً دقایقی دیگر دوباره تلاش کنید.",
         "pending_alert_minutes": 30,
+        "backup_enabled": True,
+        "backup_interval_hours": 24,
+        "backup_bot_token": env.get("BACKUP_BOT_TOKEN", ""),
+        "backup_chat_id": env.get("BACKUP_CHAT_ID", ""),
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -1074,7 +1078,16 @@ def check_force_join(token: str, env: dict[str, str], chat_id: int, user_id: int
     return False
 
 
-def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = None) -> int:
+def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = None, use_backup_bot: bool = False) -> int:
+    cfg = get_settings(env)
+    bkp_tok = str(cfg.get("backup_bot_token") or "").strip() if use_backup_bot else ""
+    send_tok = bkp_tok or token
+    if targets is None:
+        raw_cid = str(cfg.get("backup_chat_id") or "").strip()
+        if raw_cid.lstrip("-").isdigit():
+            targets = {int(raw_cid)}
+        else:
+            targets = get_admin_ids(env)
     files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH, LEDGER_PATH]
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_path = Path(tmp.name)
@@ -1084,11 +1097,14 @@ def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = 
             for p in files:
                 if p.exists():
                     zf.write(p, arcname=p.name)
+            if TENANTS_DIR.exists():
+                for tp in TENANTS_DIR.rglob("*.json"):
+                    zf.write(tp, arcname=str(tp.relative_to(DATA_DIR)))
         now_tehran = (datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)).strftime("%Y-%m-%d %H:%M")
         caption = f"🗄 <b>بکاپ خودکار دیتابیس ربات</b>\n🕒 {now_tehran}"
-        for adm_id in (targets or get_admin_ids(env)):
+        for adm_id in targets:
             try:
-                tg_send_document(token, adm_id, zip_path, caption=caption)
+                tg_send_document(send_tok, adm_id, zip_path, caption=caption)
                 sent += 1
             except Exception as e:
                 log.warning("Backup send failed for %s: %s", adm_id, e)
@@ -1197,7 +1213,10 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     cm_map = {"all": "فوری برای همه + بررسی بعدی", "trusted": "فوری فقط مشتریان قدیمی", "off": "تایید دستی"}
     cm_s = cm_map.get(str(cfg.get("card_instant_mode", "all")), "فوری برای همه + بررسی بعدی")
     maint_s = "🔴 فعال (فروش متوقف)" if cfg.get("maintenance_mode") else "🟢 غیرفعال"
+    bkp_s = f"فعال (هر {cfg['backup_interval_hours']}h)" if cfg.get("backup_enabled", True) else "غیرفعال"
+    bkp_tok_s = "تنظیم‌شده" if str(cfg.get("backup_bot_token") or "").strip() else "ربات اصلی"
     panel_info_line = "" if tenant else (
+        f"• بکاپ خودکار: <code>{bkp_s}</code> | ارسال به: <code>{bkp_tok_s}</code>\n"
         f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه پنل: <code>{cfg['group_id']}</code>)\n"
         "💡 <i>آیدی گروه پنل مشخص می‌کند کاربران جدید عضو کدام گروه PasarGuard شوند (در پنل‌های تک‌گروهه همان 1 است).</i>\n"
     )
@@ -1245,7 +1264,14 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": "💼 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
         [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
         [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
-        [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}] if tenant else [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
+    ])
+    if not tenant:
+        kb_rows.extend([
+            [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
+            [{"text": "🗄 روشن/خاموش بکاپ", "callback_data": "adm_toggle_backup"}, {"text": "⏱ بازه بکاپ (ساعت)", "callback_data": "adm_set:backup_interval_hours"}],
+            [{"text": "🤖 توکن ربات بکاپ", "callback_data": "adm_set:backup_bot_token"}, {"text": "🆔 آیدی مقصد بکاپ", "callback_data": "adm_set:backup_chat_id"}],
+        ])
+    kb_rows.extend([
         [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
         [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
         [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes"}],
@@ -2341,7 +2367,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             user_states.pop(user_id, None)
             key = st["key"]
             try:
-                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders", "reseller_price_per_gb", "reseller_min_gb", "pending_alert_minutes"):
+                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders", "reseller_price_per_gb", "reseller_min_gb", "pending_alert_minutes", "backup_interval_hours"):
                     val = int(t.replace(",", "").strip())
                     if val <= 0:
                         raise ValueError("باید مثبت باشد")
@@ -3196,10 +3222,19 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         return
 
     if data == "adm_backup":
-        if user_id not in get_admin_ids(env):
+        if user_id not in get_admin_ids(env) or is_tenant_bot(env):
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال ساخت بکاپ..."})
-        send_backup_zip(token, env, targets={user_id})
+        send_backup_zip(token, env, targets={user_id}, use_backup_bot=False)
+        return
+
+    if data == "adm_toggle_backup":
+        if user_id not in get_admin_ids(env) or is_tenant_bot(env):
+            return
+        cur = bool(get_settings(env).get("backup_enabled", True))
+        update_setting(env, "backup_enabled", not cur)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ وضعیت بکاپ خودکار تغییر یافت"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
         return
 
     if data == "adm_report_today":
@@ -3596,7 +3631,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
             return
         key = data.split(":", 1)[1]
-        if is_tenant_bot(env) and key in ("panel_url", "panel_user", "panel_pass", "group_id"):
+        if is_tenant_bot(env) and key in ("panel_url", "panel_user", "panel_pass", "group_id", "backup_interval_hours", "backup_bot_token", "backup_chat_id"):
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "این بخش در ربات نماینده قفل است", "show_alert": True})
             return
         labels = {
@@ -3627,6 +3662,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "gb_options": "لیست حجم‌های پیش‌فرض را با کاما یا فاصله بفرستید (مثلاً: 20,30,50,100,200,400,1000)",
             "maintenance_msg": "متن پیام نمایش‌داده‌شده در حالت تعمیر و نگهداری",
             "pending_alert_minutes": "یادآوری سفارش معوق بعد از چند دقیقه به ادمین ارسال شود (مثلاً 30)",
+            "backup_interval_hours": "فاصله زمانی بکاپ خودکار به ساعت (مثلاً 24)",
+            "backup_bot_token": "توکن ربات تلگرام مخصوص دریافت بکاپ خودکار",
+            "backup_chat_id": "آیدی عددی چت/کانال مقصد بکاپ (یا آیدی ادمین)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -3775,10 +3813,13 @@ def backup_and_report_loop(token: str, env: dict[str, str]) -> None:
                 meta["last_report_date"] = today_str
                 save_json(META_PATH, meta)
 
-            if now_ts - last_bkp >= 24 * 3600:
-                if send_backup_zip(token, env) > 0:
-                    meta["last_backup_ts"] = now_ts
-                    save_json(META_PATH, meta)
+            cfg_b = get_settings(env)
+            if not is_tenant_bot(env) and cfg_b.get("backup_enabled", True):
+                bkp_sec = max(1, int(cfg_b.get("backup_interval_hours", 24))) * 3600
+                if now_ts - last_bkp >= bkp_sec:
+                    if send_backup_zip(token, env, use_backup_bot=True) > 0:
+                        meta["last_backup_ts"] = now_ts
+                        save_json(META_PATH, meta)
 
             # Alert admins about pending orders older than pending_alert_minutes
             alert_min = int(get_settings(env).get("pending_alert_minutes", 30))
