@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -155,12 +156,29 @@ def save_json(path: Path, data: dict) -> None:
     os.chmod(path, 0o600)
 
 
+@contextmanager
+def users_file_lock(users_path: Path = USERS_PATH):
+    """Cross-process + in-process lock for any users.json file."""
+    lock_path = users_path.with_suffix(".lock")
+    users_path.parent.mkdir(parents=True, exist_ok=True)
+    with users_lock:
+        lock_fp = open(lock_path, "a+")
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+            lock_fp.close()
+
+
 def track_user(user: dict, referred_by: int | None = None) -> None:
     if not user or "id" not in user:
         return
     uid = str(user["id"])
     now = int(time.time())
-    with users_lock:
+    with users_file_lock(USERS_PATH):
         users = load_json(USERS_PATH)
         if uid not in users:
             users[uid] = {
@@ -700,26 +718,16 @@ def get_wallet_balance(user_id: int) -> int:
 def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int) -> tuple[bool, int]:
     """Cross-process file-locked wallet adjustment on any users.json."""
     uid = str(user_id)
-    lock_path = users_path.with_suffix(".lock")
-    users_path.parent.mkdir(parents=True, exist_ok=True)
-    with users_lock:
-        lock_fp = open(lock_path, "a+")
-        try:
-            if fcntl is not None:
-                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
-            users = load_json(users_path)
-            u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
-            cur = int(u.get("balance_toman", 0))
-            new_bal = cur + delta
-            if new_bal < 0:
-                return False, cur
-            u["balance_toman"] = new_bal
-            save_json(users_path, users)
-            return True, new_bal
-        finally:
-            if fcntl is not None:
-                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
-            lock_fp.close()
+    with users_file_lock(users_path):
+        users = load_json(users_path)
+        u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
+        cur = int(u.get("balance_toman", 0))
+        new_bal = cur + delta
+        if new_bal < 0:
+            return False, cur
+        u["balance_toman"] = new_bal
+        save_json(users_path, users)
+        return True, new_bal
 
 
 def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
@@ -735,6 +743,16 @@ def get_upstream_balance(env: dict[str, str]) -> int | None:
     return int(users.get(str(owner_s), {}).get("balance_toman", 0))
 
 
+def _resolve_wholesale_ppg(parent_dir: Path, owner_s: str, cur_env: dict[str, str]) -> int:
+    res_rec = load_json(parent_dir / "resellers.json").get(str(owner_s), {})
+    if res_rec.get("price_per_gb"):
+        return int(res_rec["price_per_gb"])
+    p_set = load_json(parent_dir / "settings.json")
+    if p_set.get("reseller_price_per_gb"):
+        return int(p_set["reseller_price_per_gb"])
+    return int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
+
+
 def charge_upstream_chain(data_dir: Path, gb: int) -> tuple[bool, str]:
     """Recursively deduct wholesale GB cost up the parent tenant chain."""
     cur_env = load_env_file(data_dir / ".env")
@@ -743,7 +761,7 @@ def charge_upstream_chain(data_dir: Path, gb: int) -> tuple[bool, str]:
     if not parent_s or not owner_s:
         return True, ""
     parent_dir = Path(parent_s)
-    ppg = int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
+    ppg = _resolve_wholesale_ppg(parent_dir, owner_s, cur_env)
     cost = int(gb) * ppg
     ok_up, err_up = charge_upstream_chain(parent_dir, gb)
     if not ok_up:
@@ -762,7 +780,7 @@ def refund_upstream_chain(data_dir: Path, gb: int) -> None:
     if not parent_s or not owner_s:
         return
     parent_dir = Path(parent_s)
-    ppg = int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
+    ppg = _resolve_wholesale_ppg(parent_dir, owner_s, cur_env)
     adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), int(gb) * ppg)
     refund_upstream_chain(parent_dir, gb)
 
@@ -3339,6 +3357,17 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             subprocess.run([sys.executable, "-m", "py_compile", str(tmp_path)], check=True, timeout=10)
             os.replace(tmp_path, cur_path)
             os.chmod(cur_path, 0o700)
+            try:
+                out = subprocess.run(
+                    ["systemctl", "list-units", "--type=service", "--state=running", "--plain", "--no-legend", "sales-bot-t-*.service"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                for line in out.splitlines():
+                    svc = line.split()[0] if line.split() else ""
+                    if svc.startswith("sales-bot-t-"):
+                        subprocess.run(["systemctl", "restart", svc], check=False, timeout=15)
+            except Exception:
+                pass
             meta = load_json(META_PATH)
             meta["pending_update_notify"] = {"chat_id": chat_id, "user_id": user_id}
             save_json(META_PATH, meta)
