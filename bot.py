@@ -2146,6 +2146,17 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             send_message(token, chat_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
         return
 
+    if t in ("/app", "/miniapp"):
+        miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
+        if miniapp_url and not is_tenant_bot(env):
+            send_message(
+                token,
+                chat_id,
+                "🚀 برای ورود به پنل کاربری پیشرفته روی دکمه زیر بزنید:",
+                reply_markup={"inline_keyboard": [[{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}, "style": "primary"}]]},
+            )
+        return
+
     if t == "/start" or t.startswith("/start ") or t == "/menu":
         user_states.pop(user_id, None)
         mode = get_user_menu_mode(user_id, env)
@@ -4583,6 +4594,7 @@ def main() -> None:
             {
                 "commands": [
                     {"command": "start", "description": "شروع و منوی اصلی"},
+                    {"command": "app", "description": "باز کردن مینی‌اپ (پنل کاربری)"},
                     {"command": "menu", "description": "منوی سریع و تغییر حالت منو"},
                     {"command": "buy", "description": "خرید اشتراک جدید"},
                     {"command": "renew", "description": "تمدید اشتراک با تخفیف"},
