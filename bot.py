@@ -69,7 +69,7 @@ BTN_PRICES = "💰 تعرفه و قیمت روز"
 BTN_CHECK = "📊 استعلام اشتراک"
 BTN_REFERRAL = "🤝 دعوت دوستان"
 BTN_SUPPORT = "👨‍💻 پشتیبانی"
-BTN_RESELLER = "🤝 پنل نمایندگی"
+BTN_RESELLER = "💼 پنل نمایندگی"
 BTN_HELP = "❓ راهنما"
 BTN_ADMIN = "👑 پنل ادمین"
 
@@ -722,7 +722,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         min_tmn = min_gb * ppg
         bal = get_wallet_balance(user_id)
         txt = (
-            "🤝 <b>درخواست پنل نمایندگی</b>\n\n"
+            "💼 <b>درخواست پنل نمایندگی</b>\n\n"
             "شما هنوز نماینده نیستید. شرایط دریافت پنل نمایندگی:\n"
             f"• تعرفهٔ ثابت نماینده: <b>{ppg:,} تومان</b> به ازای هر گیگ (بدون افزایش ماهانه)\n"
             f"• حداقل شارژ/خرید اولیه: <b>{min_gb:,} گیگ</b> (معادل <b>{min_tmn:,} تومان</b>)\n"
@@ -747,7 +747,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
     max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
     cap_s = f"{max_acc} گیگ" if max_acc > 0 else "نامحدود"
     txt = (
-        "🤝 <b>پنل نمایندگی شما</b>\n\n"
+        "💼 <b>پنل نمایندگی شما</b>\n\n"
         f"💵 تعرفهٔ ثابت شما: <b>{ppg:,} تومان / گیگ</b>\n"
         f"👛 موجودی کیف پول: <b>{bal:,} تومان</b> (معادل ~<b>{est_gb:,} GB</b>)\n"
         f"📦 سقف حجم هر اکانت: <b>{cap_s}</b>\n"
@@ -955,7 +955,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "🌐 آدرس پنل", "callback_data": "adm_set:panel_url"}, {"text": "👤 یوزر پنل", "callback_data": "adm_set:panel_user"}],
             [{"text": "🔑 رمز پنل", "callback_data": "adm_set:panel_pass"}, {"text": "👥 آیدی گروه پنل", "callback_data": "adm_set:group_id"}],
             [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
-            [{"text": "🤝 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
+            [{"text": "💼 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
             [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
             [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
@@ -1970,7 +1970,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             set_reseller(t_uid, active=True, price_per_gb=ppg)
             send_message(token, chat_id, f"✅ کاربر <code>{t_uid}</code> به عنوان نماینده فعال شد.", env=env, user_id=user_id)
             try:
-                send_message(token, t_uid, "🎉 <b>پنل نمایندگی برای شما فعال شد!</b>\nاز دکمهٔ <b>🤝 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
+                send_message(token, t_uid, "🎉 <b>پنل نمایندگی برای شما فعال شد!</b>\nاز دکمهٔ <b>💼 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
             except Exception:
                 pass
             return
@@ -2149,7 +2149,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                 send_message(
                     token,
                     adm_id,
-                    f"🤝 <b>درخواست نمایندگی جدید</b>\n\n"
+                    f"💼 <b>درخواست نمایندگی جدید</b>\n\n"
                     f"👤 کاربر: <code>{user_id}</code> (@{html.escape(uname_tg)})\n"
                     f"👛 موجودی کیف پول: <b>{bal:,} تومان</b> (کف پیشنهادی: {min_tmn:,} ت)",
                     reply_markup=kb,
@@ -2642,7 +2642,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         with resellers_lock:
             res_all = load_json(RESELLERS_PATH)
-        lines = ["🤝 <b>مدیریت نمایندگان:</b>\n"]
+        lines = ["💼 <b>مدیریت نمایندگان:</b>\n"]
         kb_rows = [[{"text": "➕ افزودن نماینده با آیدی", "callback_data": "adm_res_add"}]]
         active_list = [(k, v) for k, v in res_all.items() if v.get("active")]
         if not active_list:
@@ -2662,7 +2662,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {"step": "await_admin_reseller_add"}
-        send_message(token, chat_id, "🤝 آیدی عددی تلگرام نماینده را بفرستید (اختیاری: قیمت هر گیگ):\n<code>USER_ID [PRICE]</code>\nمثال: <code>123456789 5000</code>", env=env, user_id=user_id)
+        send_message(token, chat_id, "💼 آیدی عددی تلگرام نماینده را بفرستید (اختیاری: قیمت هر گیگ):\n<code>USER_ID [PRICE]</code>\nمثال: <code>123456789 5000</code>", env=env, user_id=user_id)
         return
 
     if data.startswith("adm_res_ok:") or data.startswith("adm_res_no:") or data.startswith("adm_res_off:"):
@@ -2679,7 +2679,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                 pass
             send_message(token, chat_id, f"✅ کاربر <code>{t_uid}</code> به عنوان نماینده فعال شد.")
             try:
-                send_message(token, t_uid, "🎉 <b>درخواست نمایندگی شما تایید شد!</b>\nاز دکمهٔ <b>🤝 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
+                send_message(token, t_uid, "🎉 <b>درخواست نمایندگی شما تایید شد!</b>\nاز دکمهٔ <b>💼 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
             except Exception:
                 pass
         elif act == "adm_res_no":
