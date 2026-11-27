@@ -716,20 +716,35 @@ def get_wallet_balance(user_id: int) -> int:
         return int(load_json(USERS_PATH).get(str(user_id), {}).get("balance_toman", 0))
 
 
-def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int, note: str = "") -> tuple[bool, int]:
-    """Cross-process file-locked wallet adjustment + ledger logging on any users.json."""
+def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int, note: str = "", allow_grace: bool = False) -> tuple[bool, int]:
+    """Cross-process file-locked wallet adjustment + ledger logging (with optional 24h reseller grace)."""
     uid = str(user_id)
     now = int(time.time())
     notify_low = False
+    notify_grace_start = False
+    notify_grace_expired = False
     with users_file_lock(users_path):
         users = load_json(users_path)
         u = users.setdefault(uid, {"first_seen": now, "last_seen": now, "username": ""})
         cur = int(u.get("balance_toman", 0))
         new_bal = cur + delta
         if new_bal < 0:
-            return False, cur
+            if not allow_grace:
+                return False, cur
+            grace_start = int(u.get("grace_started_at") or 0)
+            if grace_start == 0:
+                u["grace_started_at"] = now
+                notify_grace_start = True
+            elif now - grace_start >= 86400:
+                notify_grace_expired = True
+                save_json(users_path, users)
+                return False, cur
+        else:
+            if delta > 0 and int(u.get("grace_started_at") or 0) > 0:
+                u["grace_started_at"] = 0
+
         u["balance_toman"] = new_bal
-        if delta < 0 and users_path != USERS_PATH and new_bal <= 200000:
+        if delta < 0 and users_path != USERS_PATH and 0 <= new_bal <= 200000:
             last_alert = int(u.get("low_bal_alert_ts") or 0)
             if now - last_alert >= 12 * 3600:
                 u["low_bal_alert_ts"] = now
@@ -743,20 +758,38 @@ def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int, note: s
         ledger[uid] = entries[-50:]
         save_json(ledger_path, ledger)
 
-    if notify_low:
+    if notify_grace_start or notify_grace_expired or notify_low:
         try:
             p_env = load_env_file(users_path.parent / ".env")
             p_tok = p_env.get("BOT_TOKEN")
             if p_tok:
-                send_message(
-                    p_tok,
-                    user_id,
-                    f"⚠️ <b>هشدار کمبود ترافیک و موجودی نمایندگی!</b>\n\n"
-                    f"👛 موجودی فعلی شما به <b>{new_bal:,} تومان</b> رسیده و رو به پایان است.\n"
-                    "لطفاً پیش از اتمام موجودی، حساب خود را شارژ کنید تا ساخت اکانت در رباتتان متوقف نشود.",
-                )
+                if notify_grace_start:
+                    send_message(
+                        p_tok,
+                        user_id,
+                        f"🚨 <b>هشدار قطع سرویس نمایندگی (مهلت ۲۴ ساعته)!</b>\n\n"
+                        f"👛 موجودی شما تمام شد (تراز فعلی: <b>{new_bal:,} تومان</b>).\n"
+                        "⏳ برای جلوگیری از قطع شدن مشتریان، به شما <b>۱ روز (۲۴ ساعت) فرصت</b> داده شده است.\n"
+                        "لطفاً ظرف ۲۴ ساعت آینده حساب خود را شارژ و بدهی را تسویه کنید؛ در غیر این صورت ساخت اکانت متوقف خواهد شد.",
+                    )
+                elif notify_grace_expired:
+                    send_message(
+                        p_tok,
+                        user_id,
+                        f"⛔ <b>مهلت ۲۴ ساعتهٔ نمایندگی به پایان رسید!</b>\n\n"
+                        f"👛 بدهی فعلی: <b>{cur:,} تومان</b>\n"
+                        "ساخت اکانت در ربات شما متوقف شد. برای فعال‌سازی مجدد، حساب خود را شارژ کنید.",
+                    )
+                elif notify_low:
+                    send_message(
+                        p_tok,
+                        user_id,
+                        f"⚠️ <b>هشدار کمبود ترافیک و موجودی نمایندگی!</b>\n\n"
+                        f"👛 موجودی فعلی شما به <b>{new_bal:,} تومان</b> رسیده و رو به پایان است.\n"
+                        "لطفاً پیش از اتمام موجودی، حساب خود را شارژ کنید.",
+                    )
         except Exception as e:
-            log.warning("Low balance alert failed for %s: %s", user_id, e)
+            log.warning("Balance alert failed for %s: %s", user_id, e)
     return True, new_bal
 
 
@@ -796,10 +829,10 @@ def charge_upstream_chain(data_dir: Path, gb: int, note: str = "") -> tuple[bool
     ok_up, err_up = charge_upstream_chain(parent_dir, gb, note=note)
     if not ok_up:
         return False, err_up
-    ok_cur, cur_bal = adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), -cost, note=note or f"کسر عمده {gb}GB")
+    ok_cur, cur_bal = adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), -cost, note=note or f"کسر عمده {gb}GB", allow_grace=True)
     if not ok_cur:
         refund_upstream_chain(parent_dir, gb, note="برگشت خطای کسر")
-        return False, f"❌ موجودی کیف پول نمایندگی نزد بالادست کافی نیست (نیاز: {cost:,} ت | موجودی: {cur_bal:,} ت). لطفاً حساب نمایندگی خود را شارژ کنید."
+        return False, f"❌ موجودی نمایندگی کافی نیست و مهلت ۲۴ ساعته نیز به پایان رسیده است (تراز: {cur_bal:,} ت). لطفاً حساب نمایندگی خود را شارژ کنید."
     return True, ""
 
 
