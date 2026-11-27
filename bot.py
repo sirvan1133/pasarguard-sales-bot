@@ -131,7 +131,7 @@ def get_admin_ids(env: dict[str, str]) -> set[int]:
 
 
 def get_user_menu_mode(user_id: int, env: dict[str, str] | None = None) -> str:
-    return str(get_settings(env or load_env()).get("menu_mode") or "both")
+    return str(get_settings(env or load_env()).get("menu_mode") or "inline")
 
 
 def set_user_menu_mode(user_id: int, mode: str) -> None:
@@ -303,7 +303,7 @@ def get_settings(env: dict[str, str]) -> dict:
         "reseller_min_gb": 500,
         "reseller_max_gb_per_acc": 200,
         "gb_options": list(DEFAULT_GB_OPTIONS),
-        "menu_mode": "both",
+        "menu_mode": "inline",
         "maintenance_mode": False,
         "maintenance_msg": "🛠 ربات در حال بروزرسانی و نگهداری سرورهاست. لطفاً دقایقی دیگر دوباره تلاش کنید.",
         "pending_alert_minutes": 30,
