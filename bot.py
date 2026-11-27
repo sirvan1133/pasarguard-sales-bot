@@ -4197,6 +4197,18 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             os.replace(tmp_path, cur_path)
             os.chmod(cur_path, 0o700)
             try:
+                base_raw = "https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/main"
+                ts_q = int(time.time())
+                for rel_p in ("miniapp_server.py", "webapp/index.html"):
+                    try:
+                        r_req = urllib.request.Request(f"{base_raw}/{rel_p}?t={ts_q}", headers={"User-Agent": "curl/8.5.0", "Cache-Control": "no-cache"})
+                        r_txt = urllib.request.urlopen(r_req, timeout=15).read().decode("utf-8")
+                        dst = cur_path.parent / rel_p
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        dst.write_text(r_txt, encoding="utf-8")
+                    except Exception:
+                        pass
+                subprocess.run(["systemctl", "restart", "sales-bot-demo.service", "sales-miniapp.service"], check=False, timeout=15)
                 out = subprocess.run(
                     ["systemctl", "list-units", "--type=service", "--state=running", "--plain", "--no-legend", "sales-bot-t-*.service"],
                     capture_output=True, text=True, timeout=10,
