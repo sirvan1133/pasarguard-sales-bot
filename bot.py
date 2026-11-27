@@ -385,6 +385,18 @@ def update_invoice(inv_id: str, patch: dict) -> dict | None:
         return invs[inv_id]
 
 
+def claim_invoice(inv_id: str) -> dict | None:
+    """Atomically claim an invoice once to prevent double-click double-charging."""
+    with orders_lock:
+        invs = load_json(INVOICES_PATH)
+        inv = invs.get(inv_id)
+        if not inv or inv.get("paid"):
+            return None
+        inv["paid"] = True
+        save_json(INVOICES_PATH, invs)
+        return inv
+
+
 def create_coupon(code: str, pct: float, max_uses: int = 1, owner_uid: int | None = None) -> dict:
     c = code.strip().upper()
     with coupons_lock:
@@ -2705,14 +2717,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if not get_reseller(user_id):
             return
         inv_id = data.split(":", 1)[1]
-        inv = get_invoice(inv_id)
+        inv = claim_invoice(inv_id)
         if not inv or not inv.get("res_single"):
-            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی شده", "show_alert": True})
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی یا قبلاً پرداخت شده", "show_alert": True})
             return
         gb, months, cost = int(inv["gb"]), int(inv["months"]), int(inv["cost"])
         custom_u = inv.get("custom_u", "")
-        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost)
+        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost, note=f"ساخت نماینده {gb}GB/{months}M")
         if not ok_bal:
+            update_invoice(inv_id, {"paid": False})
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
             return
         ok_up, err_up = charge_upstream_chain(DATA_DIR, gb)
@@ -2762,13 +2775,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if not get_reseller(user_id):
             return
         inv_id = data.split(":", 1)[1]
-        inv = get_invoice(inv_id)
+        inv = claim_invoice(inv_id)
         if not inv or not inv.get("res_bulk"):
-            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی شده", "show_alert": True})
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی یا قبلاً پرداخت شده", "show_alert": True})
             return
         cnt, gb, months, cost = int(inv["cnt"]), int(inv["gb"]), int(inv["months"]), int(inv["cost"])
-        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost)
+        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost, note=f"ساخت گروهی {cnt}×{gb}GB")
         if not ok_bal:
+            update_invoice(inv_id, {"paid": False})
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
             return
         ok_up, err_up = charge_upstream_chain(DATA_DIR, cnt * gb)
@@ -3107,8 +3121,13 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         coupon_pct = float(inv.get("coupon_pct", 0.0) or 0.0)
         p = calc_price(gb, months, env=env, is_renew=bool(target_username), coupon_pct=coupon_pct)
         if method == "wallet":
-            ok_bal, new_bal = adjust_wallet_balance(user_id, -p["total_toman"])
+            claimed = claim_invoice(inv_id)
+            if not claimed:
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "این پیش‌فاکتور قبلاً پرداخت شده یا منقضی شده است", "show_alert": True})
+                return
+            ok_bal, new_bal = adjust_wallet_balance(user_id, -p["total_toman"], note=f"پرداخت فاکتور {gb}GB/{months}M")
             if not ok_bal:
+                update_invoice(inv_id, {"paid": False})
                 tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کیف پول کافی نیست", "show_alert": True})
                 return
             order_id = secrets.token_hex(4).upper()
@@ -3363,8 +3382,20 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
 
         action_note = ""
         if order.get("type") == "topup":
-            adjust_wallet_balance(target_uid, -int(order["total_toman"]))
-            action_note = "مبلغ شارژ از کیف پول کسر شد"
+            _, rem_b = adjust_wallet_balance_at(USERS_PATH, target_uid, -int(order["total_toman"]), note=f"کسر شارژ جعلی #{order_id}", allow_grace=True)
+            disabled_cnt = 0
+            with orders_lock:
+                recent_subs = [
+                    o.get("panel_username") for o in load_json(ORDERS_PATH).values()
+                    if o.get("user_id") == target_uid and o.get("status") == "approved" and o.get("panel_username") and int(o.get("created_at") or 0) >= int(order.get("created_at") or 0)
+                ]
+            for un_s in set(recent_subs):
+                try:
+                    panel_request(env, f"/api/user/{urllib.parse.quote(un_s)}", method="PUT", body={"status": "disabled"})
+                    disabled_cnt += 1
+                except Exception:
+                    pass
+            action_note = f"مبلغ شارژ کسر شد (تراز: {rem_b:,} ت) | اکانت غیرفعال‌شده: {disabled_cnt}"
         elif order.get("panel_username"):
             try:
                 panel_request(env, f"/api/user/{urllib.parse.quote(order['panel_username'])}", method="PUT", body={"status": "disabled"})
@@ -3461,14 +3492,18 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             pu = panel_request(env, f"/api/user/{urllib.parse.quote(uname)}")
             if act == "adm_u_addgb":
                 add_gb = int(parts[2])
-                ok_up, err_up = charge_upstream_chain(DATA_DIR, add_gb)
+                ok_up, err_up = charge_upstream_chain(DATA_DIR, add_gb, note=f"هدیه ادمین +{add_gb}GB ({uname})")
                 if not ok_up:
                     tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی بالادست کافی نیست", "show_alert": True})
                     send_message(token, chat_id, err_up, env=env, user_id=user_id)
                     return
-                add_b = add_gb * 1024 * 1024 * 1024
-                new_lim = int(pu.get("data_limit") or 0) + add_b
-                panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"data_limit": new_lim})
+                try:
+                    add_b = add_gb * 1024 * 1024 * 1024
+                    new_lim = int(pu.get("data_limit") or 0) + add_b
+                    panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"data_limit": new_lim})
+                except Exception:
+                    refund_upstream_chain(DATA_DIR, add_gb, note=f"برگشت خطای هدیه ({uname})")
+                    raise
                 msg_ok = f"✅ +{parts[2]} گیگ به <code>{html.escape(uname)}</code> اضافه شد."
             elif act == "adm_u_adddays":
                 now_ts = int(time.time())
