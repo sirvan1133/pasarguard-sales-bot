@@ -25,7 +25,7 @@
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body {
       margin: 0;
-      padding: 0 0 88px 0;
+      padding: 0 0 105px 0;
       font-family: 'Vazirmatn', Tahoma, sans-serif;
       background: var(--bg);
       color: var(--text);
@@ -273,8 +273,10 @@
           <button class="btn" onclick="goTab('subs')">📊 وضعیت سرویس‌ها</button>
           <button class="btn" onclick="goTab('wallet')">👛 شارژ و انتقال</button>
         </div>
-        <button class="btn btn-success" style="margin-bottom:8px" onclick="claimTrial()">🎁 دریافت تست رایگان</button>
-        <button class="btn" onclick="sendBotMenu()">💬 نمایش منوی ربات در چت</button>
+        <div class="btn-row">
+          <button class="btn btn-success" onclick="claimTrial()">🎁 دریافت تست رایگان</button>
+          <button class="btn btn-primary" onclick="sendBotMenu()">💬 منوی ربات در چت</button>
+        </div>
       </div>
     </div>
 
