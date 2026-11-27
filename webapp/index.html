@@ -441,14 +441,95 @@
         <div class="stat-box"><div class="lbl">✅ تاییدشده</div><div class="val" id="admAppr">0</div></div>
       </div>
       <div class="card">
-        <div class="card-title"><span>⚙️ تنظیمات سریع</span><button class="btn btn-sm" onclick="loadBootstrap()">🔄</button></div>
-        <label>قیمت پایه هر گیگ (تومان):</label>
-        <input id="admPrice" type="number" />
-        <label>تخفیف تمدید (٪):</label>
-        <input id="admRenewDisc" type="number" />
-        <label>تخفیف کمپین همگانی (٪):</label>
-        <input id="admGlobalDisc" type="number" />
-        <button class="btn btn-primary" style="margin-top:10px" onclick="saveAdminSettings()">💾 ذخیره تنظیمات</button>
+        <div class="card-title"><span>⚙️ تنظیمات جامع پنل ادمین</span><button class="btn btn-sm" onclick="loadBootstrap()">🔄</button></div>
+
+        <label>💵 قیمت پایه هر گیگ (تومان):</label>
+        <input id="adm_base_price_per_gb" type="number" />
+        <div class="btn-row">
+          <div style="flex:1"><label>📈 سود زیر سقف (٪):</label><input id="adm_pct_under_threshold" type="number" step="0.1" /></div>
+          <div style="flex:1"><label>📈 سود بالای سقف (٪):</label><input id="adm_pct_over_threshold" type="number" step="0.1" /></div>
+        </div>
+        <div class="btn-row">
+          <div style="flex:1"><label>📦 آستانه عمده (GB):</label><input id="adm_bulk_threshold_gb" type="number" /></div>
+          <div style="flex:1"><label>🔄 تخفیف تمدید (٪):</label><input id="adm_renew_discount_pct" type="number" step="0.5" /></div>
+        </div>
+        <div class="btn-row">
+          <div style="flex:1"><label>🏷 تخفیف کمپین (٪):</label><input id="adm_global_discount_pct" type="number" step="0.5" /></div>
+          <div style="flex:1"><label>👥 پاداش رفرال (٪):</label><input id="adm_referral_reward_pct" type="number" step="0.5" /></div>
+        </div>
+        <label>📦 بسته‌های حجم (با کاما جدا کنید):</label>
+        <input id="adm_gb_options" placeholder="20,30,50,100,200,400,1000" />
+
+        <div class="btn-row">
+          <div style="flex:1"><label>🎁 تست رایگان:</label><select id="adm_trial_enabled"><option value="1">فعال</option><option value="0">غیرفعال</option></select></div>
+          <div style="flex:1"><label>حجم تست (GB):</label><input id="adm_trial_gb" type="number" /></div>
+        </div>
+        <div class="btn-row">
+          <div style="flex:1"><label>مدت تست (ساعت):</label><input id="adm_trial_hours" type="number" /></div>
+          <div style="flex:1"><label>فاصله تست (روز):</label><input id="adm_trial_cooldown_days" type="number" /></div>
+        </div>
+
+        <div class="btn-row">
+          <div style="flex:1"><label>📢 قفل کانال:</label><select id="adm_force_join_enabled"><option value="0">غیرفعال</option><option value="1">فعال</option></select></div>
+          <div style="flex:1"><label>آیدی کانال:</label><input id="adm_force_join_channel" placeholder="@channel" /></div>
+        </div>
+
+        <div class="btn-row">
+          <div style="flex:1"><label>⏰ یادآور (روز مانده):</label><input id="adm_reminder_days" type="number" /></div>
+          <div style="flex:1"><label>یادآور (درصد حجم):</label><input id="adm_reminder_pct" type="number" /></div>
+        </div>
+
+        <label>💳 شماره کارت:</label>
+        <input id="adm_card_number" dir="ltr" />
+        <label>👤 نام صاحب کارت:</label>
+        <input id="adm_card_owner" />
+        <label>🪙 آدرس ولت تتر (BEP20):</label>
+        <input id="adm_usdt_bep20" dir="ltr" />
+
+        <div class="btn-row">
+          <div style="flex:1"><label>⚡ حالت کارت‌به‌کارت:</label><select id="adm_card_instant_mode"><option value="all">فوری همه</option><option value="trusted">مشتری قدیمی</option><option value="off">تایید دستی</option></select></div>
+          <div style="flex:1"><label>🎛 حالت منوی ربات:</label><select id="adm_menu_mode"><option value="inline">فقط شیشه‌ای</option><option value="keyboard">فقط کیبوردی</option><option value="both">هر دو</option></select></div>
+        </div>
+
+        <div class="btn-row">
+          <div style="flex:1"><label>⏳ سقف معلق:</label><input id="adm_max_pending_orders" type="number" /></div>
+          <div style="flex:1"><label>هشدار معوق (دقیقه):</label><input id="adm_pending_alert_minutes" type="number" /></div>
+        </div>
+
+        <div class="btn-row">
+          <div style="flex:1"><label>💼 قیمت گیگ نماینده:</label><input id="adm_reseller_price_per_gb" type="number" /></div>
+          <div style="flex:1"><label>کف گیگ نماینده:</label><input id="adm_reseller_min_gb" type="number" /></div>
+        </div>
+        <label>🎯 سقف گیگ هر اکانت نماینده:</label>
+        <input id="adm_reseller_max_gb_per_acc" type="number" />
+
+        <div class="btn-row">
+          <div style="flex:1"><label>🛠 حالت تعمیر:</label><select id="adm_maintenance_mode"><option value="0">خاموش</option><option value="1">روشن</option></select></div>
+          <div style="flex:1"><label>🗄 بکاپ خودکار:</label><select id="adm_backup_enabled"><option value="1">فعال</option><option value="0">غیرفعال</option></select></div>
+        </div>
+        <div class="btn-row">
+          <div style="flex:1"><label>⏱ بازه بکاپ (ساعت):</label><input id="adm_backup_interval_hours" type="number" /></div>
+          <div style="flex:1"><label>🆔 آیدی مقصد بکاپ:</label><input id="adm_backup_chat_id" /></div>
+        </div>
+        <label>📝 متن پیام تعمیر:</label>
+        <input id="adm_maintenance_msg" />
+
+        <button class="btn btn-primary" style="margin-top:12px" onclick="saveAdminSettings()">💾 ذخیره تمام تنظیمات</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>👛 شارژ / کسر دستی کیف پول کاربر</span></div>
+        <div class="btn-row">
+          <input id="admWalUid" type="number" placeholder="آیدی عددی کاربر" />
+          <input id="admWalDelta" type="number" placeholder="مبلغ (+ یا -)" />
+        </div>
+        <button class="btn btn-success" style="margin-top:8px" onclick="admWalletAdjust()">اعمال روی کیف پول</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>📢 ارسال پیام همگانی</span></div>
+        <textarea id="admBroadTxt" rows="2" placeholder="متن اطلاعیه برای همه کاربران..."></textarea>
+        <button class="btn btn-primary" style="margin-top:8px" onclick="admBroadcast()">📤 ارسال به همه کاربران</button>
       </div>
       <div class="card">
         <div class="card-title"><span>⏳ سفارش‌های در انتظار</span></div>
@@ -796,12 +877,24 @@
       document.getElementById('admTotal').innerText = `${(adm.total_toman || 0).toLocaleString()} ت`;
       document.getElementById('admPend').innerText = adm.pending_count || 0;
       document.getElementById('admAppr').innerText = (adm.approved_count || 0).toLocaleString();
-      document.getElementById('admPrice').value = adm.base_price_per_gb || 15000;
-      document.getElementById('admRenewDisc').value = adm.renew_discount_pct || 0;
-      document.getElementById('admGlobalDisc').value = adm.global_discount_pct || 0;
+      const s = adm.settings || {};
+      const numIds = ['base_price_per_gb','pct_under_threshold','pct_over_threshold','bulk_threshold_gb','renew_discount_pct','global_discount_pct','referral_reward_pct','gb_options','trial_gb','trial_hours','trial_cooldown_days','force_join_channel','reminder_days','reminder_pct','card_number','card_owner','usdt_bep20','card_instant_mode','menu_mode','max_pending_orders','pending_alert_minutes','reseller_price_per_gb','reseller_min_gb','reseller_max_gb_per_acc','backup_interval_hours','backup_chat_id','maintenance_msg'];
+      numIds.forEach(k => { const el = document.getElementById('adm_' + k); if (el && s[k] !== undefined) el.value = s[k]; });
+      ['trial_enabled','force_join_enabled','maintenance_mode','backup_enabled'].forEach(k => {
+        const el = document.getElementById('adm_' + k);
+        if (el) el.value = s[k] ? '1' : '0';
+      });
       const oBox = document.getElementById('admOrdersList');
       const orders = adm.pending_orders || [];
-      oBox.innerHTML = orders.length ? orders.map(o => `<div class="stat-box" style="margin-bottom:6px"><strong>#${o.id}</strong> • ${o.gb}GB / ${o.months}M • ${(o.total_toman||0).toLocaleString()} ت<div class="muted">کاربر: ${o.user_id} | روش: ${o.pay_method}</div></div>`).join('') : '<div class="muted">سفارش معلقی نیست.</div>';
+      oBox.innerHTML = orders.length ? orders.map(o => `
+        <div class="stat-box" style="margin-bottom:8px">
+          <strong>#${o.id}</strong> • ${o.gb}GB / ${o.months}M • ${(o.total_toman||0).toLocaleString()} ت
+          <div class="muted">کاربر: ${o.user_id} | روش: ${o.pay_method}</div>
+          <div class="btn-row" style="margin-top:6px">
+            <button class="btn btn-success btn-sm" onclick="admOrderAct('${o.id}','ok')">✅ تایید</button>
+            <button class="btn btn-danger btn-sm" onclick="admOrderAct('${o.id}','no')">❌ رد</button>
+          </div>
+        </div>`).join('') : '<div class="muted">سفارش معلقی نیست.</div>';
       const tBox = document.getElementById('admTicketsList');
       const tks = adm.open_tickets || [];
       tBox.innerHTML = tks.length ? tks.map(t => `<div class="stat-box" style="margin-bottom:6px"><strong>#${t.id} • ${t.subject}</strong><div class="muted">کاربر: ${t.user_id}</div><div class="btn-row" style="margin-top:6px"><input id="admTkIn_${t.id}" placeholder="پاسخ..." /><button class="btn btn-primary btn-sm" onclick="admReplyTicket('${t.id}')">ارسال</button></div></div>`).join('') : '<div class="muted">تیکت بازی نیست.</div>';
@@ -809,11 +902,45 @@
 
     async function saveAdminSettings() {
       try {
-        const res = await api('admin/save_settings', 'POST', {
-          base_price_per_gb: parseInt(document.getElementById('admPrice').value),
-          renew_discount_pct: parseFloat(document.getElementById('admRenewDisc').value),
-          global_discount_pct: parseFloat(document.getElementById('admGlobalDisc').value),
+        const payload = {};
+        ['base_price_per_gb','pct_under_threshold','pct_over_threshold','bulk_threshold_gb','renew_discount_pct','global_discount_pct','referral_reward_pct','gb_options','trial_gb','trial_hours','trial_cooldown_days','force_join_channel','reminder_days','reminder_pct','card_number','card_owner','usdt_bep20','card_instant_mode','menu_mode','max_pending_orders','pending_alert_minutes','reseller_price_per_gb','reseller_min_gb','reseller_max_gb_per_acc','backup_interval_hours','backup_chat_id','maintenance_msg'].forEach(k => {
+          const el = document.getElementById('adm_' + k);
+          if (el) payload[k] = el.value;
         });
+        ['trial_enabled','force_join_enabled','maintenance_mode','backup_enabled'].forEach(k => {
+          const el = document.getElementById('adm_' + k);
+          if (el) payload[k] = (el.value === '1');
+        });
+        const res = await api('admin/save_settings', 'POST', payload);
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admWalletAdjust() {
+      const user_id = parseInt(document.getElementById('admWalUid').value);
+      const delta = parseInt(document.getElementById('admWalDelta').value);
+      if (!user_id || !delta) return showToast('آیدی و مبلغ را وارد کنید');
+      try {
+        const res = await api('admin/wallet_adjust', 'POST', { user_id, delta });
+        showToast(res.message);
+        document.getElementById('admWalDelta').value = '';
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admBroadcast() {
+      const text = document.getElementById('admBroadTxt').value.trim();
+      if (!text) return showToast('متن پیام را بنویسید');
+      try {
+        const res = await api('admin/broadcast', 'POST', { text });
+        showToast(res.message);
+        document.getElementById('admBroadTxt').value = '';
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admOrderAct(order_id, action) {
+      try {
+        const res = await api('admin/order_action', 'POST', { order_id, action });
         showToast(res.message);
         await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }

@@ -269,10 +269,39 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         "pending_count": random.randint(1, 6),
                         "approved_count": random.randint(310, 1290),
                         "total_toman": random.randint(45, 290) * 1000000,
-                        "base_price_per_gb": 15000,
-                        "renew_discount_pct": 10,
-                        "global_discount_pct": 5,
-                        "maintenance_mode": False,
+                        "settings": {
+                            "base_price_per_gb": 15000,
+                            "pct_under_threshold": 2.0,
+                            "pct_over_threshold": 1.0,
+                            "bulk_threshold_gb": 100,
+                            "renew_discount_pct": 10,
+                            "global_discount_pct": 5,
+                            "referral_reward_pct": 20,
+                            "gb_options": "20,30,50,100,200,400,1000",
+                            "trial_enabled": True,
+                            "trial_gb": 1,
+                            "trial_hours": 24,
+                            "trial_cooldown_days": 7,
+                            "force_join_enabled": False,
+                            "force_join_channel": "@demo_channel",
+                            "reminder_days": 3,
+                            "reminder_pct": 10,
+                            "card_number": "6037-99**-****-1234",
+                            "card_owner": "حساب نمایشی تست",
+                            "usdt_bep20": "0xDEMO00000000000000000000000000000000DEMO",
+                            "card_instant_mode": "all",
+                            "max_pending_orders": 2,
+                            "pending_alert_minutes": 30,
+                            "reseller_price_per_gb": 5000,
+                            "reseller_min_gb": 500,
+                            "reseller_max_gb_per_acc": 200,
+                            "menu_mode": "inline",
+                            "maintenance_mode": False,
+                            "maintenance_msg": "🛠 ربات در حال بروزرسانی است.",
+                            "backup_enabled": False,
+                            "backup_interval_hours": 24,
+                            "backup_chat_id": "",
+                        },
                         "pending_orders": [
                             {"id": "DEMO1A", "user_id": 91001122, "gb": 50, "months": 1, "total_toman": 750000, "pay_method": "card_miniapp"},
                             {"id": "DEMO2B", "user_id": 82003344, "gb": 100, "months": 3, "total_toman": 1530000, "pay_method": "usdt"},
@@ -314,10 +343,39 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     "pending_count": len(pend_list),
                     "approved_count": len(appr_list),
                     "total_toman": sum(int(o.get("total_toman") or 0) for o in appr_list),
-                    "base_price_per_gb": int(cfg.get("base_price_per_gb", 15000)),
-                    "renew_discount_pct": float(cfg.get("renew_discount_pct", 10)),
-                    "global_discount_pct": float(cfg.get("global_discount_pct", 0)),
-                    "maintenance_mode": bool(cfg.get("maintenance_mode", False)),
+                    "settings": {
+                        "base_price_per_gb": int(cfg.get("base_price_per_gb", 15000)),
+                        "pct_under_threshold": float(cfg.get("pct_under_threshold", 2.0)),
+                        "pct_over_threshold": float(cfg.get("pct_over_threshold", 1.0)),
+                        "bulk_threshold_gb": int(cfg.get("bulk_threshold_gb", 100)),
+                        "renew_discount_pct": float(cfg.get("renew_discount_pct", 10)),
+                        "global_discount_pct": float(cfg.get("global_discount_pct", 0)),
+                        "referral_reward_pct": float(cfg.get("referral_reward_pct", 20)),
+                        "gb_options": ",".join(str(x) for x in cfg.get("gb_options", bot.DEFAULT_GB_OPTIONS)),
+                        "trial_enabled": bool(cfg.get("trial_enabled", True)),
+                        "trial_gb": int(cfg.get("trial_gb", 1)),
+                        "trial_hours": int(cfg.get("trial_hours", 24)),
+                        "trial_cooldown_days": int(cfg.get("trial_cooldown_days", 7)),
+                        "force_join_enabled": bool(cfg.get("force_join_enabled", False)),
+                        "force_join_channel": str(cfg.get("force_join_channel", "")),
+                        "reminder_days": int(cfg.get("reminder_days", 3)),
+                        "reminder_pct": int(cfg.get("reminder_pct", 10)),
+                        "card_number": str(cfg.get("card_number", "")),
+                        "card_owner": str(cfg.get("card_owner", "")),
+                        "usdt_bep20": str(cfg.get("usdt_bep20", "")),
+                        "card_instant_mode": str(cfg.get("card_instant_mode", "all")),
+                        "max_pending_orders": int(cfg.get("max_pending_orders", 2)),
+                        "pending_alert_minutes": int(cfg.get("pending_alert_minutes", 30)),
+                        "reseller_price_per_gb": int(cfg.get("reseller_price_per_gb", 5000)),
+                        "reseller_min_gb": int(cfg.get("reseller_min_gb", 500)),
+                        "reseller_max_gb_per_acc": int(cfg.get("reseller_max_gb_per_acc", 200)),
+                        "menu_mode": str(cfg.get("menu_mode", "inline")),
+                        "maintenance_mode": bool(cfg.get("maintenance_mode", False)),
+                        "maintenance_msg": str(cfg.get("maintenance_msg", "")),
+                        "backup_enabled": bool(cfg.get("backup_enabled", True)),
+                        "backup_interval_hours": int(cfg.get("backup_interval_hours", 24)),
+                        "backup_chat_id": str(cfg.get("backup_chat_id", "")),
+                    },
                     "pending_orders": pend_list[:15],
                     "open_tickets": all_tks[:15],
                 }
@@ -374,16 +432,84 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 return self._send_json(403, {"error": "دسترسی ادمین ندارید"})
             if path == "/vpnapp/api/admin/save_settings":
                 cur_cfg = bot.load_json(bot.SETTINGS_PATH)
-                if "base_price_per_gb" in body:
-                    cur_cfg["base_price_per_gb"] = max(1000, int(body["base_price_per_gb"]))
-                if "renew_discount_pct" in body:
-                    cur_cfg["renew_discount_pct"] = max(0.0, min(90.0, float(body["renew_discount_pct"])))
-                if "global_discount_pct" in body:
-                    cur_cfg["global_discount_pct"] = max(0.0, min(90.0, float(body["global_discount_pct"])))
-                if "maintenance_mode" in body:
-                    cur_cfg["maintenance_mode"] = bool(body["maintenance_mode"])
+                int_fields = ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "reminder_pct", "max_pending_orders", "pending_alert_minutes", "reseller_price_per_gb", "reseller_min_gb", "reseller_max_gb_per_acc", "backup_interval_hours")
+                float_fields = ("pct_under_threshold", "pct_over_threshold", "renew_discount_pct", "global_discount_pct", "referral_reward_pct")
+                bool_fields = ("trial_enabled", "force_join_enabled", "maintenance_mode", "backup_enabled")
+                str_fields = ("force_join_channel", "card_number", "card_owner", "usdt_bep20", "card_instant_mode", "menu_mode", "maintenance_msg", "backup_chat_id")
+                for k in int_fields:
+                    if k in body and body[k] != "":
+                        cur_cfg[k] = int(body[k])
+                for k in float_fields:
+                    if k in body and body[k] != "":
+                        cur_cfg[k] = float(body[k])
+                for k in bool_fields:
+                    if k in body:
+                        cur_cfg[k] = bool(body[k])
+                for k in str_fields:
+                    if k in body:
+                        cur_cfg[k] = str(body[k]).strip()
+                if "gb_options" in body:
+                    opts = [int(x.strip()) for x in str(body["gb_options"]).split(",") if x.strip().isdigit() and int(x.strip()) > 0]
+                    if opts:
+                        cur_cfg["gb_options"] = opts
                 bot.save_json(bot.SETTINGS_PATH, cur_cfg)
-                return self._send_json(200, {"message": "✅ تنظیمات با موفقیت ذخیره شد"})
+                return self._send_json(200, {"message": "✅ تمام تنظیمات با موفقیت ذخیره و اعمال شد"})
+            if path == "/vpnapp/api/admin/wallet_adjust":
+                t_uid = int(body.get("user_id") or 0)
+                delta = int(body.get("delta") or 0)
+                if t_uid <= 0 or delta == 0:
+                    return self._send_json(400, {"error": "آیدی یا مبلغ نامعتبر است"})
+                ok, new_b = bot.adjust_wallet(t_uid, delta, f"تنظیم دستی ادمین از مینی‌اپ")
+                if not ok:
+                    return self._send_json(400, {"error": "خطا در تغییر موجودی"})
+                return self._send_json(200, {"message": f"✅ موجودی کاربر {t_uid} به {new_b:,} تومان تغییر یافت"})
+            if path == "/vpnapp/api/admin/broadcast":
+                msg_txt = str(body.get("text") or "").strip()[:3500]
+                if not msg_txt:
+                    return self._send_json(400, {"error": "متن پیام همگانی خالی است"})
+                users = bot.load_json(bot.USERS_PATH)
+                sent_ok = 0
+                for k in list(users.keys()):
+                    if k.isdigit():
+                        try:
+                            bot.send_message(token, int(k), f"📢 <b>اطلاعیه مدیریت:</b>\n\n{html.escape(msg_txt)}")
+                            sent_ok += 1
+                        except Exception:
+                            pass
+                return self._send_json(200, {"message": f"📢 پیام همگانی به {sent_ok} کاربر ارسال شد"})
+            if path == "/vpnapp/api/admin/order_action":
+                oid = str(body.get("order_id") or "").strip()
+                act = str(body.get("action") or "").strip()
+                if act not in ("ok", "no") or not oid:
+                    return self._send_json(400, {"error": "درخواست نامعتبر"})
+                orders = bot.load_json(bot.ORDERS_PATH)
+                o = orders.get(oid)
+                if not o or o.get("status") != "pending":
+                    return self._send_json(404, {"error": "سفارش معلق یافت نشد"})
+                if act == "no":
+                    o["status"] = "rejected"
+                    bot.save_json(bot.ORDERS_PATH, orders)
+                    try:
+                        bot.send_message(token, int(o["user_id"]), f"❌ متأسفانه سفارش <code>#{oid}</code> توسط مدیریت رد شد.")
+                    except Exception:
+                        pass
+                    return self._send_json(200, {"message": f"❌ سفارش #{oid} رد شد"})
+                target_un = o.get("target_username") or ""
+                if target_un:
+                    pu = bot.renew_panel_user(env, target_un, int(o["gb"]), int(o["months"]))
+                    uname, sub_url = target_un, pu.get("subscription_url") or ""
+                else:
+                    pu = bot.create_panel_user(env, oid, int(o["user_id"]), int(o["gb"]), int(o["months"]), o.get("pay_method", "card"))
+                    uname, sub_url = pu["username"], pu.get("subscription_url") or ""
+                o["status"] = "approved"
+                o["panel_username"] = uname
+                o["sub_url"] = sub_url
+                bot.save_json(bot.ORDERS_PATH, orders)
+                try:
+                    bot.send_qr_with_sub(token, int(o["user_id"]), sub_url, f"✅ <b>سفارش #{oid} تایید و فعال شد!</b>\n🆔 نام کاربری: <code>{html.escape(uname)}</code>\n🔗 لینک ساب:\n<code>{html.escape(sub_url)}</code>", env, int(o["user_id"]))
+                except Exception:
+                    pass
+                return self._send_json(200, {"message": f"✅ سفارش #{oid} تایید و سرویس {uname} ساخته شد"})
             if path == "/vpnapp/api/admin/ticket_reply":
                 tid = str(body.get("ticket_id") or "").strip()
                 text = str(body.get("text") or "").strip()[:2000]
