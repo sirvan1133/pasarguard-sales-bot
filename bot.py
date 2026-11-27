@@ -822,6 +822,28 @@ def get_upstream_balance(env: dict[str, str]) -> int | None:
     return int(users.get(str(owner_s), {}).get("balance_toman", 0))
 
 
+def get_sales_wallet_balance(user_id: int) -> int:
+    with users_file_lock(USERS_PATH):
+        return int(load_json(USERS_PATH).get(str(user_id), {}).get("sales_balance_toman", 0))
+
+
+def add_sales_wallet_balance(owner_uid: int, delta: int, note: str = "") -> int:
+    uid = str(owner_uid)
+    now = int(time.time())
+    with users_file_lock(USERS_PATH):
+        users = load_json(USERS_PATH)
+        u = users.setdefault(uid, {"first_seen": now, "last_seen": now, "username": ""})
+        new_bal = int(u.get("sales_balance_toman", 0)) + delta
+        u["sales_balance_toman"] = new_bal
+        save_json(USERS_PATH, users)
+        ledger = load_json(LEDGER_PATH)
+        entries = ledger.get(f"sales_{uid}", [])
+        entries.append({"ts": now, "delta": int(delta), "balance": new_bal, "note": note or "درآمد فروش"})
+        ledger[f"sales_{uid}"] = entries[-50:]
+        save_json(LEDGER_PATH, ledger)
+    return new_bal
+
+
 def _resolve_wholesale_ppg(parent_dir: Path, owner_s: str, cur_env: dict[str, str]) -> int:
     res_rec = load_json(parent_dir / "resellers.json").get(str(owner_s), {})
     if res_rec.get("price_per_gb"):
@@ -928,6 +950,28 @@ def get_reseller_price_per_gb(user_id: int, env: dict[str, str]) -> int:
 
 def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: int, message_id: int | None = None) -> None:
     cfg = get_settings(env)
+    if is_tenant_bot(env) and user_id in get_admin_ids(env):
+        up_bal = get_upstream_balance(env) or 0
+        sales_bal = get_sales_wallet_balance(user_id)
+        ppg = int(env.get("WHOLESALE_PPG", "5000") or 5000)
+        parent_u = env.get("PARENT_BOT_USERNAME", "")
+        txt = (
+            "💼 <b>پنل نمایندگی شما (ادمین این ربات)</b>\n\n"
+            f"💼 <b>کیف پول بالادستی (اعتبار خرید از بالادست):</b> <b>{up_bal:,} تومان</b> (تعرفه: {ppg:,} ت/گیگ)\n"
+            f"💵 <b>کیف پول فروش (دریافتی از زیردست‌ها و مشتریان):</b> <b>{sales_bal:,} تومان</b>\n\n"
+            "• وقتی زیردست‌ها خرید/تمدید کنند، هزینهٔ عمده از <b>کیف پول بالادستی</b> شما کسر می‌شود.\n"
+            "• برای افزایش اعتبار بالادستی، در ربات بالادست شارژ کنید."
+        )
+        rows = [[{"text": "💼 مدیریت زیرنمایندگان", "callback_data": "adm_resellers"}]]
+        if parent_u:
+            rows.append([{"text": f"➕ شارژ کیف پول بالادستی (@{parent_u})", "url": f"https://t.me/{parent_u}"}])
+        kb = {"inline_keyboard": rows}
+        if message_id is not None:
+            edit_message(token, chat_id, message_id, txt, reply_markup=kb)
+        else:
+            send_message(token, chat_id, txt, reply_markup=kb)
+        return
+
     rec = get_reseller(user_id)
     if not rec:
         min_gb = int(cfg.get("reseller_min_gb", 500))
@@ -994,6 +1038,12 @@ def provision_tenant_bot(env: dict[str, str], owner_uid: int, bot_token: str) ->
     os.chmod(t_dir, 0o700)
     root_dir = env.get("ROOT_DIR") or str(DATA_DIR)
     ppg = get_reseller_price_per_gb(owner_uid, env)
+    parent_u = bot_info_cache.get("username", "")
+    if not parent_u:
+        try:
+            parent_u = tg_api(env["BOT_TOKEN"], "getMe", timeout=8).get("result", {}).get("username", "")
+        except Exception:
+            parent_u = ""
     env_content = (
         f"BOT_TOKEN={tok}\n"
         f"ADMIN_IDS={owner_uid}\n"
@@ -1001,6 +1051,7 @@ def provision_tenant_bot(env: dict[str, str], owner_uid: int, bot_token: str) ->
         f"PARENT_DIR={DATA_DIR}\n"
         f"ROOT_DIR={root_dir}\n"
         f"WHOLESALE_PPG={ppg}\n"
+        f"PARENT_BOT_USERNAME={parent_u}\n"
     )
     t_env = t_dir / ".env"
     t_env.write_text(env_content, encoding="utf-8")
@@ -1208,7 +1259,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     if tenant:
         up_bal = get_upstream_balance(env)
         up_s = f"{up_bal:,} تومان" if up_bal is not None else "-"
-        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 💼 موجودی نمایندگی: <b>{up_s}</b>"
+        sales_s = f"{get_sales_wallet_balance(int(env.get('TENANT_OWNER_ID') or 0)):,} ت"
+        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 💼 بالادستی: <b>{up_s}</b> | 💵 فروش: <b>{sales_s}</b>"
     else:
         try:
             sys_info = panel_request(env, "/api/system")
@@ -1411,7 +1463,9 @@ def grant_referral_reward(token: str, env: dict[str, str], buyer_id: int) -> Non
 def fulfill_approved_order(token: str, env: dict[str, str], order_id: str, order: dict) -> str:
     if order.get("type") == "topup":
         amt = int(order["total_toman"])
-        _, new_bal = adjust_wallet_balance(order["user_id"], amt)
+        _, new_bal = adjust_wallet_balance(order["user_id"], amt, note=f"شارژ کیف پول #{order_id}")
+        if is_tenant_bot(env) and env.get("TENANT_OWNER_ID") and str(order["user_id"]) != str(env["TENANT_OWNER_ID"]):
+            add_sales_wallet_balance(int(env["TENANT_OWNER_ID"]), amt, note=f"شارژ کاربر/زیردست {order['user_id']} (#{order_id})")
         with orders_lock:
             orders = load_json(ORDERS_PATH)
             orders[order_id]["status"] = "approved"
@@ -1471,6 +1525,9 @@ def fulfill_approved_order(token: str, env: dict[str, str], order_id: str, order
 
     if order.get("coupon_code"):
         consume_coupon(order["coupon_code"], order["user_id"])
+
+    if is_tenant_bot(env) and env.get("TENANT_OWNER_ID") and order.get("pay_method") in ("card", "usdt") and str(order["user_id"]) != str(env["TENANT_OWNER_ID"]):
+        add_sales_wallet_balance(int(env["TENANT_OWNER_ID"]), int(order.get("total_toman") or 0), note=f"فروش مستقیم #{order_id} ({uname})")
 
     send_qr_with_sub(token, order["user_id"], full_sub, caption, env, order["user_id"])
     grant_referral_reward(token, env, order["user_id"])
@@ -1728,6 +1785,24 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_WALLET or t == "/wallet":
         user_states.pop(user_id, None)
+        if is_tenant_bot(env) and user_id in get_admin_ids(env):
+            up_bal = get_upstream_balance(env) or 0
+            sales_bal = get_sales_wallet_balance(user_id)
+            parent_u = env.get("PARENT_BOT_USERNAME", "")
+            rows = [[{"text": "📜 گزارش تراکنش‌های فروش", "callback_data": "sales_ledger"}]]
+            if parent_u:
+                rows.insert(0, [{"text": f"➕ شارژ کیف پول بالادستی (@{parent_u})", "url": f"https://t.me/{parent_u}"}])
+            send_message(
+                token,
+                chat_id,
+                f"👛 <b>کیف پول‌های شما (نماینده)</b>\n\n"
+                f"💼 <b>کیف پول بالادستی (خرید از بالادست):</b> <b>{up_bal:,} تومان</b>\n"
+                f"💵 <b>کیف پول فروش (واریزی زیردست‌ها و مشتریان):</b> <b>{sales_bal:,} تومان</b>\n\n"
+                "• هنگام خرید/تمدید مشتریان و زیردست‌ها، هزینهٔ عمده از <b>کیف پول بالادستی</b> کسر می‌شود.\n"
+                "• مبلغی که زیردست‌ها واریز می‌کنند به <b>کیف پول فروش</b> شما اضافه می‌گردد.",
+                reply_markup={"inline_keyboard": rows},
+            )
+            return
         bal = get_wallet_balance(user_id)
         kb = {
             "inline_keyboard": [
@@ -2933,13 +3008,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(un)}</code> حذف شد و مبلغ <b>{refund_amt:,} تومان</b> به کیف پول شما برگشت.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>")
         return
 
-    if data == "wallet_ledger" or data.startswith("adm_u_ledger:"):
+    if data == "wallet_ledger" or data == "sales_ledger" or data.startswith("adm_u_ledger:"):
         target_uid = int(data.split(":", 1)[1]) if data.startswith("adm_u_ledger:") else user_id
         if data.startswith("adm_u_ledger:") and user_id not in get_admin_ids(env):
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        ledger_key = f"sales_{target_uid}" if data == "sales_ledger" else str(target_uid)
         with users_file_lock(USERS_PATH):
-            entries = load_json(LEDGER_PATH).get(str(target_uid), [])
+            entries = load_json(LEDGER_PATH).get(ledger_key, [])
         if not entries:
             send_message(token, chat_id, "📭 هنوز تراکنشی برای این حساب ثبت نشده است.", env=env, user_id=user_id)
             return
