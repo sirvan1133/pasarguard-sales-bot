@@ -195,6 +195,7 @@ def get_settings(env: dict[str, str]) -> dict:
         "force_join_enabled": False,
         "force_join_channel": "",
         "max_pending_orders": 2,
+        "card_instant_mode": "all",
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -261,6 +262,29 @@ def calc_price(
         "usdt_rate": usdt_rate,
         "usdt_amount": usdt_amount,
     }
+
+
+def generate_unique_card_amount(base_toman: int) -> int:
+    """Add a 3-digit random suffix (101..999) unique across the last 48 hours."""
+    cutoff = int(time.time()) - 48 * 3600
+    with orders_lock:
+        orders = load_json(ORDERS_PATH)
+        invs = load_json(INVOICES_PATH)
+        used = {
+            int(o.get("total_toman") or 0)
+            for o in orders.values()
+            if int(o.get("created_at") or 0) >= cutoff and o.get("pay_method") == "card"
+        }
+        used.update(
+            int(v.get("card_toman") or 0)
+            for v in invs.values()
+            if int(v.get("ts") or 0) >= cutoff and v.get("card_toman")
+        )
+    for _ in range(900):
+        candidate = base_toman + (101 + secrets.randbelow(899))
+        if candidate not in used:
+            return candidate
+    return base_toman + (101 + secrets.randbelow(899))
 
 
 def save_invoice(data: dict) -> str:
@@ -792,6 +816,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         rate_s = "خطا"
     trial_s = f"فعال ({cfg['trial_gb']}GB / {cfg['trial_hours']}h / هر {cfg['trial_cooldown_days']} روز)" if cfg.get("trial_enabled", True) else "غیرفعال"
     fj_s = f"فعال ({cfg['force_join_channel']})" if cfg.get("force_join_enabled") else "غیرفعال"
+    cm_map = {"all": "فوری برای همه + بررسی بعدی", "trusted": "فوری فقط مشتریان قدیمی", "off": "تایید دستی"}
+    cm_s = cm_map.get(str(cfg.get("card_instant_mode", "all")), "فوری برای همه + بررسی بعدی")
     txt = (
         "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
         f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
@@ -804,6 +830,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | کمپین همگانی: <code>{cfg['global_discount_pct']}٪</code> | رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
         f"• تست رایگان: <code>{trial_s}</code>\n"
         f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
+        f"• حالت کارت‌به‌کارت: <code>{cm_s}</code>\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
@@ -828,7 +855,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
             [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
-            [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
+            [{"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
         ]
     }
     if message_id is not None:
@@ -1023,10 +1050,12 @@ def handle_receipt_submission(token: str, env: dict[str, str], m: dict, st: dict
     tx_key = extract_tx_key(m)
     if is_topup:
         rate = get_usdt_toman_rate()
-        amt_tmn = int(st["topup_toman"])
+        amt_tmn = int(st.get("card_toman") or st["topup_toman"])
         p = {"total_toman": amt_tmn, "usdt_rate": rate, "usdt_amount": round(amt_tmn / rate, 2)}
     else:
         p = calc_price(gb, months, env=env, is_renew=is_renew, coupon_pct=coupon_pct)
+        if pay_method == "card" and st.get("card_toman"):
+            p["total_toman"] = int(st["card_toman"])
     order_id = secrets.token_hex(4).upper()
 
     with orders_lock:
@@ -1077,6 +1106,60 @@ def handle_receipt_submission(token: str, env: dict[str, str], m: dict, st: dict
         }
         orders[order_id] = order
         save_json(ORDERS_PATH, orders)
+
+    # Instant card-to-card activation with post-audit when enabled
+    cfg = get_settings(env)
+    card_mode = str(cfg.get("card_instant_mode", "all"))
+    if pay_method == "card" and card_mode in ("all", "trusted"):
+        is_trusted = True
+        if card_mode == "trusted":
+            with orders_lock:
+                is_trusted = any(
+                    o.get("user_id") == user_id and o.get("status") == "approved" and o.get("id") != order_id
+                    for o in load_json(ORDERS_PATH).values()
+                )
+        if is_trusted:
+            with orders_lock:
+                orders = load_json(ORDERS_PATH)
+                orders[order_id]["status"] = "processing"
+                orders[order_id]["audit_status"] = "pending_review"
+                save_json(ORDERS_PATH, orders)
+            try:
+                uname = fulfill_approved_order(token, env, order_id, order)
+                type_label = "👛 شارژ کیف پول" if is_topup else (f"🔄 تمدید (<code>{html.escape(target_username)}</code>)" if is_renew else "🛒 خرید جدید")
+                plan_line = "📦 پلن: <b>شارژ کیف پول</b>\n" if is_topup else f"📦 پلن: <b>{gb} گیگ / {months} ماه</b>\n"
+                audit_cap = (
+                    f"⚡ <b>فعال‌سازی فوری کارت‌به‌کارت #{order_id} (نیازمند بررسی واریز)</b>\n\n"
+                    f"📌 نوع: {type_label}\n"
+                    f"👤 کاربر: <code>{user_id}</code> (@{html.escape(username)})\n"
+                    f"🆔 اکانت: <code>{html.escape(uname)}</code>\n"
+                    f"{plan_line}"
+                    f"💵 مبلغ یکتای واریزی: <b>{p['total_toman']:,} تومان</b>"
+                )
+                audit_kb = {
+                    "inline_keyboard": [[
+                        {"text": "✅ واریز تایید شد", "callback_data": f"adm_audit_ok:{order_id}"},
+                        {"text": "🚫 فیش جعلی (قطع اکانت)", "callback_data": f"adm_audit_fake:{order_id}"},
+                    ]]
+                }
+                for adm_id in get_admin_ids(env):
+                    try:
+                        if "photo" in m and m["photo"]:
+                            tg_api(token, "sendPhoto", {"chat_id": adm_id, "photo": m["photo"][-1]["file_id"], "caption": audit_cap, "parse_mode": "HTML", "reply_markup": audit_kb})
+                        elif "document" in m:
+                            tg_api(token, "sendDocument", {"chat_id": adm_id, "document": m["document"]["file_id"], "caption": audit_cap, "parse_mode": "HTML", "reply_markup": audit_kb})
+                        else:
+                            send_message(token, adm_id, f"{audit_cap}\n\n📝 کد پیگیری:\n<code>{html.escape(m.get('text') or '')}</code>", reply_markup=audit_kb)
+                    except Exception:
+                        pass
+                return
+            except Exception as e:
+                with orders_lock:
+                    orders = load_json(ORDERS_PATH)
+                    if order_id in orders:
+                        orders[order_id]["status"] = "pending"
+                        save_json(ORDERS_PATH, orders)
+                auto_note = f"\n⚠️ خطا در فعال‌سازی فوری: {html.escape(str(e))}"
 
     # Automatic BSC BEP20 USDT verification when user submits a 0x... TxHash
     auto_note = ""
@@ -1186,6 +1269,12 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
     chat_id = m["chat"]["id"]
     user_id = m["from"]["id"]
     t = m["text"].strip()
+
+    if user_id not in get_admin_ids(env):
+        with users_lock:
+            if load_json(USERS_PATH).get(str(user_id), {}).get("blocked"):
+                send_message(token, chat_id, "⛔ حساب شما به دلیل ارسال رسید نامعتبر مسدود شده است.")
+                return
 
     if t in ("/help", BTN_HELP, "/guide"):
         user_states.pop(user_id, None)
@@ -1726,6 +1815,12 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
     chat_id = msg["chat"]["id"]
     msg_id = msg["message_id"]
 
+    if user_id not in get_admin_ids(env):
+        with users_lock:
+            if load_json(USERS_PATH).get(str(user_id), {}).get("blocked"):
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "حساب شما مسدود است", "show_alert": True})
+                return
+
     if data == "buy_restart":
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         edit_message(token, chat_id, msg_id, "📦 <b>مرحله ۱:</b> حجم مورد نظر (به گیگابایت) را انتخاب کنید:", reply_markup=build_gb_keyboard("buy"))
@@ -1806,14 +1901,16 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if method == "usdt" and str(cfg["usdt_bep20"]).lower().startswith("0x000000000"):
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "آدرس تتر هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
             return
+        card_amt = generate_unique_card_amount(amt) if method == "card" else amt
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
-        user_states[user_id] = {"step": "await_receipt", "is_topup": True, "topup_toman": amt, "pay_method": method}
+        user_states[user_id] = {"step": "await_receipt", "is_topup": True, "topup_toman": amt, "card_toman": card_amt, "pay_method": method}
         if method == "card":
             txt = (
                 "💳 <b>شارژ کیف پول (کارت‌به‌کارت)</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
                 f"به نام: <b>{html.escape(str(cfg['card_owner']))}</b>\n"
-                f"مبلغ دقیق: <code>{amt:,}</code> تومان\n\n"
+                f"مبلغ دقیق و یکتا: <code>{card_amt:,}</code> تومان\n"
+                "<i>(عدد رندوم برای شناسایی خودکار واریز شما اضافه شده است)</i>\n\n"
                 "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
             )
         else:
@@ -1953,6 +2050,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if method == "usdt" and str(cfg["usdt_bep20"]).lower().startswith("0x000000000"):
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "آدرس تتر هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
             return
+        card_amt = inv.get("card_toman") or (generate_unique_card_amount(p["total_toman"]) if method == "card" else p["total_toman"])
+        if method == "card" and not inv.get("card_toman"):
+            update_invoice(inv_id, {"card_toman": card_amt})
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {
             "step": "await_receipt",
@@ -1962,13 +2062,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "target_username": target_username,
             "coupon_code": coupon_code,
             "coupon_pct": coupon_pct,
+            "card_toman": card_amt,
         }
         if method == "card":
             txt = (
                 "💳 <b>پرداخت کارت‌به‌کارت</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
                 f"به نام: <b>{html.escape(str(cfg['card_owner']))}</b>\n"
-                f"مبلغ دقیق: <code>{p['total_toman']:,}</code> تومان\n\n"
+                f"مبلغ دقیق و یکتا: <code>{card_amt:,}</code> تومان\n"
+                "<i>(عدد رندوم برای شناسایی خودکار واریز شما اضافه شده است)</i>\n\n"
                 "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
             )
         else:
@@ -2030,6 +2132,71 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         start_ts = int((tehran_midnight - timedelta(hours=3, minutes=30)).timestamp())
         rep = build_sales_report(start_ts, int(time.time()) + 1, f"گزارش فروش امروز ({tehran_now.strftime('%Y-%m-%d')})")
         send_message(token, chat_id, rep, env=env, user_id=user_id)
+        return
+
+    if data == "adm_cycle_card_mode":
+        if user_id not in get_admin_ids(env):
+            return
+        cur = str(get_settings(env).get("card_instant_mode", "all"))
+        nxt = {"all": "trusted", "trusted": "off", "off": "all"}.get(cur, "all")
+        update_setting(env, "card_instant_mode", nxt)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"✅ حالت کارت‌به‌کارت: {nxt}"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
+    if data.startswith("adm_audit_ok:") or data.startswith("adm_audit_fake:"):
+        if user_id not in get_admin_ids(env):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "فقط ادمین مجاز است", "show_alert": True})
+            return
+        act, order_id = data.split(":", 1)
+        with orders_lock:
+            orders = load_json(ORDERS_PATH)
+            order = orders.get(order_id)
+            if not order:
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "سفارش پیدا نشد", "show_alert": True})
+                return
+            if act == "adm_audit_ok":
+                order["audit_status"] = "verified"
+                save_json(ORDERS_PATH, orders)
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ واریز تایید نهایی شد"})
+                try:
+                    tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
+                except Exception:
+                    pass
+                send_message(token, chat_id, f"✅ واریز سفارش <code>#{order_id}</code> (<code>{order['total_toman']:,}</code> ت) تایید نهایی شد.")
+                return
+            order["status"] = "rejected"
+            order["audit_status"] = "fake"
+            save_json(ORDERS_PATH, orders)
+
+        target_uid = order["user_id"]
+        with users_lock:
+            users = load_json(USERS_PATH)
+            u_rec = users.setdefault(str(target_uid), {"first_seen": int(time.time()), "last_seen": int(time.time())})
+            u_rec["blocked"] = True
+            save_json(USERS_PATH, users)
+
+        action_note = ""
+        if order.get("type") == "topup":
+            adjust_wallet_balance(target_uid, -int(order["total_toman"]))
+            action_note = "مبلغ شارژ از کیف پول کسر شد"
+        elif order.get("panel_username"):
+            try:
+                panel_request(env, f"/api/user/{urllib.parse.quote(order['panel_username'])}", method="PUT", body={"status": "disabled"})
+                action_note = f"اکانت <code>{html.escape(order['panel_username'])}</code> غیرفعال شد"
+            except Exception as e:
+                action_note = f"خطا در غیرفعال‌سازی اکانت: {html.escape(str(e))}"
+
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🚫 مسدود و قطع شد"})
+        try:
+            tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
+        except Exception:
+            pass
+        send_message(token, chat_id, f"🚫 سفارش <code>#{order_id}</code> به عنوان فیش جعلی ثبت شد.\n• {action_note}\n• کاربر <code>{target_uid}</code> مسدود گردید.")
+        try:
+            send_message(token, target_uid, f"🚫 سفارش <code>#{order_id}</code> به دلیل عدم تایید واریز لغو و اشتراک شما مسدود شد.")
+        except Exception:
+            pass
         return
 
     if data == "adm_toggle_force_join":
