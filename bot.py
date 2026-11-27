@@ -2835,6 +2835,12 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             os.replace(tmp_path, cur_path)
             os.chmod(cur_path, 0o700)
             send_message(token, chat_id, "✅ آخرین نسخه از گیت‌هاب دریافت و کامپایل شد. در حال ری‌استارت ربات...", env=env, user_id=user_id)
+            try:
+                ack = tg_api(token, "getUpdates", {"offset": -1, "limit": 1, "timeout": 0}, timeout=5).get("result", [])
+                if ack:
+                    tg_api(token, "getUpdates", {"offset": ack[-1]["update_id"] + 1, "timeout": 0}, timeout=5)
+            except Exception:
+                pass
             os.execv(sys.executable, [sys.executable, str(cur_path)])
         except Exception as e:
             send_message(token, chat_id, f"❌ خطا در آپدیت از گیت‌هاب: {html.escape(str(e))}", env=env, user_id=user_id)
