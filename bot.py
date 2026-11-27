@@ -731,7 +731,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         )
         kb = {
             "inline_keyboard": [
-                [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}],
+                [{"text": f"➕ شارژ نمایندگی (حداقل {min_tmn:,} ت)", "callback_data": "reseller_topup"}],
                 [{"text": "📩 ارسال درخواست نمایندگی به ادمین", "callback_data": "reseller_apply"}],
             ]
         }
@@ -1672,18 +1672,25 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             handle_receipt_submission(token, env, m, st)
             return
 
-        if step == "await_topup_amount":
+        if step in ("await_topup_amount", "await_reseller_topup"):
             user_states.pop(user_id, None)
             clean = t.replace(",", "").strip()
-            if not clean.isdigit() or int(clean) < 10000 or int(clean) > 50000000:
-                send_message(token, chat_id, "❌ مبلغ باید بین ۱۰,۰۰۰ تا ۵۰,۰۰۰,۰۰۰ تومان باشد (مثلاً 200000):", env=env, user_id=user_id)
+            cfg = get_settings(env)
+            min_amt = 10000
+            if step == "await_reseller_topup":
+                min_gb = int(cfg.get("reseller_min_gb", 500))
+                ppg = int(cfg.get("reseller_price_per_gb", 5000))
+                min_amt = min_gb * ppg
+            if not clean.isdigit() or int(clean) < min_amt or int(clean) > 200000000:
+                send_message(token, chat_id, f"❌ مبلغ باید حداقل <b>{min_amt:,} تومان</b> باشد (مثلاً <code>{min_amt}</code>):", env=env, user_id=user_id)
                 return
             amt = int(clean)
             rate = get_usdt_toman_rate()
             usdt_amt = round(amt / rate, 2)
+            card_lbl = "💳 شارژ کارت‌به‌کارت (فعال‌سازی آنی)" if cfg.get("card_instant_mode", "all") != "off" else "💳 شارژ کارت‌به‌کارت"
             kb = {
                 "inline_keyboard": [
-                    [{"text": "💳 شارژ کارت‌به‌کارت", "callback_data": f"topup_pay:card:{amt}"}],
+                    [{"text": card_lbl, "callback_data": f"topup_pay:card:{amt}"}],
                     [{"text": "🪙 شارژ تتر (BEP20 - تایید خودکار)", "callback_data": f"topup_pay:usdt:{amt}"}],
                 ]
             }
@@ -2090,11 +2097,40 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         show_invoice(token, chat_id, gb, int(m_s), message_id=msg_id, env=env, target_username=target_username)
         return
 
+    if data == "reseller_topup":
+        cfg = get_settings(env)
+        min_gb = int(cfg.get("reseller_min_gb", 500))
+        ppg = int(cfg.get("reseller_price_per_gb", 5000))
+        min_tmn = min_gb * ppg
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_reseller_topup"}
+        send_message(
+            token,
+            chat_id,
+            f"💵 مبلغ شارژ اولیه نمایندگی را به تومان وارد کنید\n"
+            f"(حداقل <b>{min_tmn:,} تومان</b> معادل {min_gb:,} گیگ):",
+            env=env,
+            user_id=user_id,
+        )
+        return
+
     if data == "reseller_apply":
-        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ درخواست ارسال شد"})
         cfg = get_settings(env)
         bal = get_wallet_balance(user_id)
-        min_tmn = int(cfg.get("reseller_min_gb", 500)) * int(cfg.get("reseller_price_per_gb", 5000))
+        min_gb = int(cfg.get("reseller_min_gb", 500))
+        min_tmn = min_gb * int(cfg.get("reseller_price_per_gb", 5000))
+        if bal < min_tmn:
+            tg_api(
+                token,
+                "answerCallbackQuery",
+                {
+                    "callback_query_id": cb_id,
+                    "text": f"ابتدا باید حداقل {min_tmn:,} تومان ({min_gb} گیگ) کیف پول خود را شارژ کنید",
+                    "show_alert": True,
+                },
+            )
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ درخواست ارسال شد"})
         uname_tg = cb["from"].get("username") or "-"
         kb = {
             "inline_keyboard": [[
