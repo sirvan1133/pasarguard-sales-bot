@@ -532,6 +532,16 @@
         <button class="btn btn-primary" style="margin-top:8px" onclick="admBroadcast()">📤 ارسال به همه کاربران</button>
       </div>
       <div class="card">
+        <div class="card-title"><span>🎟 مدیریت کدهای تخفیف</span></div>
+        <div class="btn-row" style="margin-bottom:8px">
+          <input id="admCpCode" placeholder="کد (مثلاً OFF20)" />
+          <input id="admCpPct" type="number" placeholder="درصد" style="max-width:90px" />
+          <button class="btn btn-success btn-sm" onclick="admAddCoupon()">➕</button>
+        </div>
+        <div id="admCouponsList" class="muted">موردی نیست.</div>
+      </div>
+
+      <div class="card">
         <div class="card-title"><span>⏳ سفارش‌های در انتظار</span></div>
         <div id="admOrdersList" class="muted">موردی نیست.</div>
       </div>
@@ -709,6 +719,11 @@
         fileInput.value = '';
         document.getElementById('payBox').style.display = 'none';
         showToast('✅ ' + res.message);
+        if (res.auto_approved) {
+          clearRenewTarget();
+          await loadBootstrap();
+          goTab('subs');
+        }
       } catch (e) {
         showToast('❌ ' + e.message);
       } finally {
@@ -734,6 +749,11 @@
               <button class="btn btn-sm btn-primary" onclick="openQr('${s.sub_url}')">📱 QR و لینک</button>
               <button class="btn btn-sm" onclick="startRenew('${s.username}')">🔄 تمدید</button>
             </div>
+            ${s.sub_url ? `<div class="btn-row" style="margin-top:6px">
+              <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('hiddify','${s.sub_url}')">📲 Hiddify</button>
+              <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('v2rayng','${s.sub_url}')">⚡ v2rayNG</button>
+              <button class="btn btn-sm" style="flex:1;font-size:11px" onclick="importSub('streisand','${s.sub_url}')">🍎 Streisand</button>
+            </div>` : ''}
           </div>`;
       }).join('');
     }
@@ -758,6 +778,15 @@
       document.getElementById('qrModal').classList.add('show');
     }
     function closeQr() { document.getElementById('qrModal').classList.remove('show'); }
+    function importSub(app, url) {
+      const enc = encodeURIComponent(url);
+      const links = {
+        hiddify: `hiddify://import/${enc}`,
+        v2rayng: `v2rayng://install-config?url=${enc}`,
+        streisand: `streisand://import/${enc}`,
+      };
+      if (links[app]) window.location.href = links[app];
+    }
 
     async function claimTrial() {
       try {
@@ -898,6 +927,31 @@
       const tBox = document.getElementById('admTicketsList');
       const tks = adm.open_tickets || [];
       tBox.innerHTML = tks.length ? tks.map(t => `<div class="stat-box" style="margin-bottom:6px"><strong>#${t.id} • ${t.subject}</strong><div class="muted">کاربر: ${t.user_id}</div><div class="btn-row" style="margin-top:6px"><input id="admTkIn_${t.id}" placeholder="پاسخ..." /><button class="btn btn-primary btn-sm" onclick="admReplyTicket('${t.id}')">ارسال</button></div></div>`).join('') : '<div class="muted">تیکت بازی نیست.</div>';
+      const cBox = document.getElementById('admCouponsList');
+      const cps = adm.coupons || {};
+      const cKeys = Object.keys(cps);
+      cBox.innerHTML = cKeys.length ? cKeys.map(k => `<div class="stat-box" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center"><span><strong>${k}</strong> (${cps[k].percent}٪)</span><button class="btn btn-danger btn-sm" onclick="admDelCoupon('${k}')">🗑</button></div>`).join('') : '<div class="muted">کد تخفیفی نیست.</div>';
+    }
+
+    async function admAddCoupon() {
+      const code = document.getElementById('admCpCode').value.trim();
+      const percent = parseFloat(document.getElementById('admCpPct').value);
+      if (!code || !percent) return showToast('کد و درصد را وارد کنید');
+      try {
+        const res = await api('admin/coupon_add', 'POST', { code, percent });
+        document.getElementById('admCpCode').value = '';
+        document.getElementById('admCpPct').value = '';
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admDelCoupon(code) {
+      try {
+        const res = await api('admin/coupon_del', 'POST', { code });
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
     }
 
     async function saveAdminSettings() {

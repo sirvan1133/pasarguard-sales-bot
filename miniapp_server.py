@@ -309,6 +309,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         "open_tickets": [
                             {"id": "TDEMO1", "user_id": 91001122, "subject": "تغییر سرور به آلمان", "category": "پشتیبانی فنی", "status": "waiting_admin", "messages": [{"sender": "user", "text": "سلام لطفاً کانفیگ آلمان بفرستید", "time_text": "12:10"}]},
                         ],
+                        "coupons": {"WELCOME20": {"percent": 20, "active": True}, "VIP10": {"percent": 10, "active": True}},
                     },
                     "referral_link": f"https://t.me/pasarguardsalesbot?start=ref_{uid}",
                 })
@@ -378,6 +379,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     },
                     "pending_orders": pend_list[:15],
                     "open_tickets": all_tks[:15],
+                    "coupons": bot.load_json(bot.COUPONS_PATH),
                 }
             self._send_json(200, {
                 "user": {
@@ -527,6 +529,22 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 return self._send_json(200, {"message": "✅ پاسخ ارسال شد"})
+            if path == "/vpnapp/api/admin/coupon_add":
+                code = str(body.get("code") or "").strip().upper()
+                pct = float(body.get("percent") or 0)
+                if not code or pct <= 0 or pct > 95:
+                    return self._send_json(400, {"error": "کد تخفیف یا درصد (۱ تا ۹۵) نامعتبر است"})
+                cps = bot.load_json(bot.COUPONS_PATH)
+                cps[code] = {"percent": pct, "active": True, "created_at": int(time.time())}
+                bot.save_json(bot.COUPONS_PATH, cps)
+                return self._send_json(200, {"message": f"🎟 کد تخفیف {code} ({pct}٪) ثبت شد"})
+            if path == "/vpnapp/api/admin/coupon_del":
+                code = str(body.get("code") or "").strip().upper()
+                cps = bot.load_json(bot.COUPONS_PATH)
+                if code in cps:
+                    del cps[code]
+                    bot.save_json(bot.COUPONS_PATH, cps)
+                return self._send_json(200, {"message": f"🗑 کد تخفیف {code} حذف شد"})
             return self._send_json(404, {"error": "Not found"})
 
         if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping"):
@@ -638,6 +656,42 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             p = bot.calc_price(gb, months, env=env, is_renew=bool(target_un), coupon_pct=cpct)
             oid = secrets.token_hex(4).upper()
             orders = bot.load_json(bot.ORDERS_PATH)
+            if method == "usdt":
+                import re
+                m_tx = re.search(r"0x[a-fA-F0-9]{64}", note)
+                if not m_tx:
+                    return self._send_json(400, {"error": "لطفاً هش معتبر تراکنش BEP20 (شروع با 0x...) را وارد کنید"})
+                tx_hash = m_tx.group(0).lower()
+                if any(str(o.get("tx_hash") or "").lower() == tx_hash for o in orders.values()):
+                    return self._send_json(400, {"error": "این تراکنش قبلاً ثبت و استفاده شده است"})
+                cfg = bot.get_settings(env)
+                ok_tx, reason_tx, _ = bot.verify_bsc_usdt_tx(tx_hash, str(cfg.get("usdt_bep20") or ""), float(p["usdt_amount"]))
+                if ok_tx:
+                    try:
+                        if target_un:
+                            pu = bot.renew_panel_user(env, target_un, gb, months)
+                            uname, sub_url = target_un, pu.get("subscription_url") or ""
+                        else:
+                            pu = bot.create_panel_user(env, oid, uid, gb, months, "usdt_miniapp")
+                            uname, sub_url = pu["username"], pu.get("subscription_url") or ""
+                    except Exception as e:
+                        return self._send_json(500, {"error": f"تراکنش تایید شد اما خطای پنل رخ داد: {e}"})
+                    orders[oid] = {
+                        "id": oid, "user_id": uid, "username": u.get("username", ""),
+                        "type": "renew" if target_un else "buy", "target_username": target_un,
+                        "gb": gb, "months": months, "total_toman": int(p["total_toman"]),
+                        "usdt_amount": p["usdt_amount"], "pay_method": "usdt_miniapp",
+                        "status": "approved", "tx_hash": tx_hash,
+                        "panel_username": uname, "sub_url": sub_url, "created_at": int(time.time()),
+                    }
+                    bot.save_json(bot.ORDERS_PATH, orders)
+                    try:
+                        bot.send_qr_with_sub(token, uid, sub_url, f"✅ <b>پرداخت تتر تایید و سرویس فعال شد!</b>\n🆔 نام کاربری: <code>{html.escape(uname)}</code>\n🔗 لینک ساب:\n<code>{html.escape(sub_url)}</code>", env, uid)
+                    except Exception:
+                        pass
+                    return self._send_json(200, {"ok": True, "auto_approved": True, "order_id": oid, "message": f"✅ تراکنش تایید و سرویس {uname} فوری فعال شد!"})
+                if "شبکه" not in reason_tx and "خطا" not in reason_tx:
+                    return self._send_json(400, {"error": f"❌ {reason_tx}"})
             orders[oid] = {
                 "id": oid,
                 "user_id": uid,
