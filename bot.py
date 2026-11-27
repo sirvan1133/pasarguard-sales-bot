@@ -1640,7 +1640,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                     reply_markup=build_gb_keyboard("ren"),
                 )
             except Exception:
-                send_message(token, chat_id, "❌ اشتراکی با این نام کاربری یا لینک ساب پیدا نشد.", env=env, user_id=user_id)
+                user_states[user_id] = st
+                send_message(token, chat_id, "❌ اشتراکی با این نام کاربری یا لینک ساب پیدا نشد. دوباره بفرستید:", env=env, user_id=user_id)
             return
 
         if step == "await_custom_gb":
@@ -1673,7 +1674,6 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step in ("await_topup_amount", "await_reseller_topup"):
-            user_states.pop(user_id, None)
             clean = t.replace(",", "").strip()
             cfg = get_settings(env)
             min_amt = 10000
@@ -1682,8 +1682,9 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 ppg = int(cfg.get("reseller_price_per_gb", 5000))
                 min_amt = min_gb * ppg
             if not clean.isdigit() or int(clean) < min_amt or int(clean) > 200000000:
-                send_message(token, chat_id, f"❌ مبلغ باید حداقل <b>{min_amt:,} تومان</b> باشد (مثلاً <code>{min_amt}</code>):", env=env, user_id=user_id)
+                send_message(token, chat_id, f"❌ مبلغ باید حداقل <b>{min_amt:,} تومان</b> باشد (مثلاً <code>{min_amt}</code>). دوباره بفرستید:", env=env, user_id=user_id)
                 return
+            user_states.pop(user_id, None)
             amt = int(clean)
             rate = get_usdt_toman_rate()
             usdt_amt = round(amt / rate, 2)
@@ -1730,18 +1731,18 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step == "await_admin_wallet" and user_id in get_admin_ids(env):
-            user_states.pop(user_id, None)
             parts = t.split()
             if len(parts) != 2 or not parts[0].isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code> (یا عدد منفی برای کسر)", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code> (دوباره بفرستید):", env=env, user_id=user_id)
                 return
             try:
                 t_uid = int(parts[0])
                 delta = int(parts[1].replace(",", ""))
                 ok, new_bal = adjust_wallet_balance(t_uid, delta)
                 if not ok:
-                    send_message(token, chat_id, "❌ موجودی کاربر کافی نیست تا این مقدار کسر شود.", env=env, user_id=user_id)
+                    send_message(token, chat_id, "❌ موجودی کاربر کافی نیست تا این مقدار کسر شود. دوباره بفرستید:", env=env, user_id=user_id)
                     return
+                user_states.pop(user_id, None)
                 send_message(token, chat_id, f"✅ موجودی کاربر <code>{t_uid}</code> به <b>{new_bal:,} تومان</b> تغییر یافت.", env=env, user_id=user_id)
                 if delta > 0:
                     try:
@@ -1753,16 +1754,17 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step == "await_coupon":
-            user_states.pop(user_id, None)
             inv_id = st["inv_id"]
             inv = get_invoice(inv_id)
             if not inv:
+                user_states.pop(user_id, None)
                 send_message(token, chat_id, "❌ پیش‌فاکتور منقضی شده است، لطفاً دوباره انتخاب کنید.", env=env, user_id=user_id)
                 return
             ok, err_msg, pct = validate_coupon(t, user_id)
             if not ok:
-                send_message(token, chat_id, err_msg, env=env, user_id=user_id)
+                send_message(token, chat_id, f"{err_msg}\nکد دیگری بفرستید:", env=env, user_id=user_id)
                 return
+            user_states.pop(user_id, None)
             code = t.strip().upper()
             inv = update_invoice(inv_id, {"coupon_code": code, "coupon_pct": pct})
             send_message(token, chat_id, f"✅ کد تخفیف <code>{html.escape(code)}</code> ({pct}٪) اعمال شد!", env=env, user_id=user_id)
@@ -1780,10 +1782,9 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step == "await_admin_coupon" and user_id in get_admin_ids(env):
-            user_states.pop(user_id, None)
             parts = t.split()
             if len(parts) < 2:
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>CODE PERCENT [MAX_USES]</code>\nمثلاً: <code>OFF20 20 50</code>", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>CODE PERCENT [MAX_USES]</code>\nمثلاً: <code>OFF20 20 50</code> (دوباره بفرستید):", env=env, user_id=user_id)
                 return
             try:
                 code = parts[0].upper()
@@ -1791,6 +1792,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 max_uses = int(parts[2]) if len(parts) >= 3 else 1
                 if pct <= 0 or pct > 90 or max_uses < 1:
                     raise ValueError("درصد باید بین ۱ تا ۹۰ و تعداد حداقل ۱ باشد")
+                user_states.pop(user_id, None)
                 create_coupon(code, pct, max_uses=max_uses)
                 send_message(token, chat_id, f"✅ کد تخفیف <code>{html.escape(code)}</code> ({pct}٪، ظرفیت {max_uses}) ساخته شد.", env=env, user_id=user_id)
                 show_admin_panel(token, chat_id, env)
@@ -1860,27 +1862,29 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 except Exception as e:
                     lines.append(f"\n⚠️ اکانت پنل <code>{html.escape(target_uname)}</code> یافت نشد: {html.escape(str(e))}")
             if not kb_rows:
-                lines.append("❌ موردی پیدا نشد.")
-            send_message(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows} if kb_rows else None, env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ موردی پیدا نشد. آیدی یا نام کاربری دیگری بفرستید:", env=env, user_id=user_id)
+                return
+            send_message(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows}, env=env, user_id=user_id)
             return
 
         if step == "await_res_bulk":
-            user_states.pop(user_id, None)
             if not get_reseller(user_id):
+                user_states.pop(user_id, None)
                 return
             parts = t.split()
             if len(parts) != 3 or not all(p.isdigit() for p in parts):
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>COUNT GB MONTHS</code>\nمثال: <code>5 30 1</code> (۵ اکانت ۳۰ گیگ ۱ ماهه)", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>COUNT GB MONTHS</code>\nمثال: <code>5 30 1</code> (دوباره بفرستید):", env=env, user_id=user_id)
                 return
             cnt, gb, months = int(parts[0]), int(parts[1]), int(parts[2])
             cfg = get_settings(env)
             max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
             if cnt < 1 or cnt > 30 or gb < 1 or months < 1 or months > 36:
-                send_message(token, chat_id, "❌ تعداد بین ۱ تا ۳۰، حجم از ۱ گیگ و مدت بین ۱ تا ۳۶ ماه مجاز است.", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ تعداد بین ۱ تا ۳۰، حجم از ۱ گیگ و مدت بین ۱ تا ۳۶ ماه مجاز است. دوباره بفرستید:", env=env, user_id=user_id)
                 return
             if max_acc > 0 and gb > max_acc:
-                send_message(token, chat_id, f"❌ حداکثر حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است.", env=env, user_id=user_id)
+                send_message(token, chat_id, f"❌ حداکثر حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است. دوباره بفرستید:", env=env, user_id=user_id)
                 return
+            user_states.pop(user_id, None)
             ppg = get_reseller_price_per_gb(user_id, env)
             cost = cnt * gb * ppg
             bal = get_wallet_balance(user_id)
@@ -1933,8 +1937,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step == "await_res_custom_gb":
-            user_states.pop(user_id, None)
             if not get_reseller(user_id):
+                user_states.pop(user_id, None)
                 return
             if not t.isdigit() or int(t) < 1:
                 send_message(token, chat_id, "❌ عدد معتبر وارد کنید:", env=env, user_id=user_id)
@@ -1943,8 +1947,9 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             cfg = get_settings(env)
             max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
             if max_acc > 0 and gb > max_acc:
-                send_message(token, chat_id, f"❌ سقف حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است.", env=env, user_id=user_id)
+                send_message(token, chat_id, f"❌ سقف حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است. عدد دیگری بفرستید:", env=env, user_id=user_id)
                 return
+            user_states.pop(user_id, None)
             renew_u = st.get("renew_uname", "")
             rows = [
                 [{"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"}, {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"}],
@@ -1955,11 +1960,11 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             return
 
         if step == "await_admin_reseller_add" and user_id in get_admin_ids(env):
-            user_states.pop(user_id, None)
             parts = t.split()
             if not parts or not parts[0].isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID [PRICE_PER_GB]</code>\nمثال: <code>123456789 5000</code>", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID [PRICE_PER_GB]</code>\nمثال: <code>123456789 5000</code> (دوباره بفرستید):", env=env, user_id=user_id)
                 return
+            user_states.pop(user_id, None)
             t_uid = int(parts[0])
             ppg = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
             set_reseller(t_uid, active=True, price_per_gb=ppg)
@@ -1998,7 +2003,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 send_message(token, chat_id, f"✅ پارامتر <code>{key}</code> با موفقیت به <code>{html.escape(str(val))}</code> تغییر یافت.", env=env, user_id=user_id)
                 show_admin_panel(token, chat_id, env)
             except Exception as e:
-                send_message(token, chat_id, f"❌ مقدار نامعتبر: {html.escape(str(e))}", env=env, user_id=user_id)
+                user_states[user_id] = st
+                send_message(token, chat_id, f"❌ مقدار نامعتبر: {html.escape(str(e))}\nدوباره بفرستید:", env=env, user_id=user_id)
             return
 
         if step == "await_check":
