@@ -1882,8 +1882,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             cnt, gb, months = int(parts[0]), int(parts[1]), int(parts[2])
             cfg = get_settings(env)
             max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
-            if cnt < 1 or cnt > 30 or gb < 1 or months < 1 or months > 36:
-                send_message(token, chat_id, "❌ تعداد بین ۱ تا ۳۰، حجم از ۱ گیگ و مدت بین ۱ تا ۳۶ ماه مجاز است. دوباره بفرستید:", env=env, user_id=user_id)
+            if cnt < 1 or cnt > 30 or gb < 1 or months < 1 or months > 3:
+                send_message(token, chat_id, "❌ تعداد بین ۱ تا ۳۰، حجم از ۱ گیگ و مدت بین ۱ تا ۳ ماه مجاز است. دوباره بفرستید:", env=env, user_id=user_id)
                 return
             if max_acc > 0 and gb > max_acc:
                 send_message(token, chat_id, f"❌ حداکثر حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است. دوباره بفرستید:", env=env, user_id=user_id)
@@ -1956,9 +1956,11 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             user_states.pop(user_id, None)
             renew_u = st.get("renew_uname", "")
             rows = [
-                [{"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"}, {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"}],
-                [{"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"}, {"text": "۶ ماهه", "callback_data": f"res_m:{gb}:6:{renew_u}"}],
-                [{"text": "۱۲ ماهه", "callback_data": f"res_m:{gb}:12:{renew_u}"}],
+                [
+                    {"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"},
+                    {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"},
+                    {"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"},
+                ]
             ]
             send_message(token, chat_id, f"⏳ حجم: <b>{gb} گیگ</b>\nمدت زمان را انتخاب کنید:", reply_markup={"inline_keyboard": rows})
             return
@@ -2194,9 +2196,11 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             return
         gb = int(gb_s)
         rows = [
-            [{"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"}, {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"}],
-            [{"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"}, {"text": "۶ ماهه", "callback_data": f"res_m:{gb}:6:{renew_u}"}],
-            [{"text": "۱۲ ماهه", "callback_data": f"res_m:{gb}:12:{renew_u}"}],
+            [
+                {"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"},
+                {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"},
+                {"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"},
+            ]
         ]
         edit_message(token, chat_id, msg_id, f"⏳ حجم: <b>{gb} گیگ</b>\nمدت زمان را انتخاب کنید:", reply_markup={"inline_keyboard": rows})
         return
@@ -2206,6 +2210,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             return
         _, gb_s, m_s, renew_u = data.split(":", 3)
         gb, months = int(gb_s), int(m_s)
+        if months < 1 or months > 3:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "حداکثر مدت مجاز برای نماینده ۳ ماه است", "show_alert": True})
+            return
         if not renew_u:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
             user_states[user_id] = {"step": "await_res_username", "gb": gb, "months": months}
