@@ -244,6 +244,8 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         "first_name": u.get("first_name", "") + " (حالت تست)",
                         "username": u.get("username", ""),
                         "balance": random.choice([850000, 1250000, 2400000]),
+                        "is_admin": True,
+                        "is_demo": True,
                     },
                     "settings": {"gb_options": cfg.get("gb_options", bot.DEFAULT_GB_OPTIONS)},
                     "payment": {
@@ -262,6 +264,23 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         }
                     ],
                     "tickets": get_user_tickets(uid),
+                    "admin_data": {
+                        "users_count": random.randint(420, 1850),
+                        "pending_count": random.randint(1, 6),
+                        "approved_count": random.randint(310, 1290),
+                        "total_toman": random.randint(45, 290) * 1000000,
+                        "base_price_per_gb": 15000,
+                        "renew_discount_pct": 10,
+                        "global_discount_pct": 5,
+                        "maintenance_mode": False,
+                        "pending_orders": [
+                            {"id": "DEMO1A", "user_id": 91001122, "gb": 50, "months": 1, "total_toman": 750000, "pay_method": "card_miniapp"},
+                            {"id": "DEMO2B", "user_id": 82003344, "gb": 100, "months": 3, "total_toman": 1530000, "pay_method": "usdt"},
+                        ],
+                        "open_tickets": [
+                            {"id": "TDEMO1", "user_id": 91001122, "subject": "تغییر سرور به آلمان", "category": "پشتیبانی فنی", "status": "waiting_admin", "messages": [{"sender": "user", "text": "سلام لطفاً کانفیگ آلمان بفرستید", "time_text": "12:10"}]},
+                        ],
+                    },
                     "referral_link": f"https://t.me/pasarguardsalesbot?start=ref_{uid}",
                 })
             bot_u = env.get("BOT_USERNAME") or "vpnnnVipbot"
@@ -278,12 +297,38 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     bot.send_message(env["BOT_TOKEN"], uid, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=bot.build_home_inline_keyboard(uid, env))
                 except Exception:
                     pass
+            is_adm = uid in bot.get_admin_ids(env)
+            adm_data = None
+            if is_adm:
+                all_orders = bot.load_json(bot.ORDERS_PATH)
+                pend_list = [o for o in all_orders.values() if o.get("status") == "pending"]
+                pend_list.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
+                appr_list = [o for o in all_orders.values() if o.get("status") == "approved"]
+                all_tks = [t for t in load_tickets().values() if t.get("status") != "closed"]
+                all_tks.sort(key=lambda x: int(x.get("updated_at") or 0), reverse=True)
+                for t in all_tks:
+                    for m in t.get("messages", []):
+                        m["time_text"] = fmt_ts(int(m.get("ts", 0)))
+                adm_data = {
+                    "users_count": len(bot.load_json(bot.USERS_PATH)),
+                    "pending_count": len(pend_list),
+                    "approved_count": len(appr_list),
+                    "total_toman": sum(int(o.get("total_toman") or 0) for o in appr_list),
+                    "base_price_per_gb": int(cfg.get("base_price_per_gb", 15000)),
+                    "renew_discount_pct": float(cfg.get("renew_discount_pct", 10)),
+                    "global_discount_pct": float(cfg.get("global_discount_pct", 0)),
+                    "maintenance_mode": bool(cfg.get("maintenance_mode", False)),
+                    "pending_orders": pend_list[:15],
+                    "open_tickets": all_tks[:15],
+                }
             self._send_json(200, {
                 "user": {
                     "id": uid,
                     "first_name": u.get("first_name", ""),
                     "username": u.get("username", ""),
                     "balance": bot.get_wallet_balance(uid),
+                    "is_admin": is_adm,
+                    "is_demo": False,
                 },
                 "settings": {"gb_options": cfg.get("gb_options", bot.DEFAULT_GB_OPTIONS)},
                 "payment": {
@@ -293,6 +338,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 },
                 "subs": fetch_user_subs(env, uid),
                 "tickets": get_user_tickets(uid),
+                "admin_data": adm_data,
                 "referral_link": f"https://t.me/{bot_u}?start=ref_{uid}",
             })
             return
@@ -320,6 +366,42 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 target_env["BOT_TOKEN"] = token
             bot.send_message(token, uid, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=bot.build_home_inline_keyboard(uid, target_env))
             return self._send_json(200, {"ok": True})
+
+        if path.startswith("/vpnapp/api/admin/"):
+            if is_demo:
+                return self._send_json(400, {"error": "🧪 این ربات در حالت تست و نمایشی است و تغییر تنظیمات ادمین غیرفعال است."})
+            if uid not in bot.get_admin_ids(env):
+                return self._send_json(403, {"error": "دسترسی ادمین ندارید"})
+            if path == "/vpnapp/api/admin/save_settings":
+                cur_cfg = bot.load_json(bot.SETTINGS_PATH)
+                if "base_price_per_gb" in body:
+                    cur_cfg["base_price_per_gb"] = max(1000, int(body["base_price_per_gb"]))
+                if "renew_discount_pct" in body:
+                    cur_cfg["renew_discount_pct"] = max(0.0, min(90.0, float(body["renew_discount_pct"])))
+                if "global_discount_pct" in body:
+                    cur_cfg["global_discount_pct"] = max(0.0, min(90.0, float(body["global_discount_pct"])))
+                if "maintenance_mode" in body:
+                    cur_cfg["maintenance_mode"] = bool(body["maintenance_mode"])
+                bot.save_json(bot.SETTINGS_PATH, cur_cfg)
+                return self._send_json(200, {"message": "✅ تنظیمات با موفقیت ذخیره شد"})
+            if path == "/vpnapp/api/admin/ticket_reply":
+                tid = str(body.get("ticket_id") or "").strip()
+                text = str(body.get("text") or "").strip()[:2000]
+                tickets = load_tickets()
+                tk = tickets.get(tid)
+                if not tk or not text:
+                    return self._send_json(404, {"error": "تیکت یا متن نامعتبر است"})
+                now = int(time.time())
+                tk.setdefault("messages", []).append({"sender": "admin", "text": text, "ts": now})
+                tk["status"] = "answered"
+                tk["updated_at"] = now
+                save_tickets(tickets)
+                try:
+                    bot.send_message(token, int(tk["user_id"]), f"🎫 <b>پاسخ پشتیبانی به تیکت <code>#{tid}</code></b>\n📌 {html.escape(tk['subject'])}\n\n💬 {html.escape(text)}")
+                except Exception:
+                    pass
+                return self._send_json(200, {"message": "✅ پاسخ ارسال شد"})
+            return self._send_json(404, {"error": "Not found"})
 
         if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping"):
             return self._send_json(200, {"ok": True, "message": "🧪 این عملیات در حالت تست و نمایشی شبیه‌سازی شد (تغییری در سرور واقعی ثبت نشد)."})

@@ -180,10 +180,11 @@
       width: calc(100% - 20px); max-width: 500px;
       background: rgba(16, 23, 42, 0.88); backdrop-filter: blur(18px);
       border: 1px solid var(--card-border); border-radius: 20px;
-      display: grid; grid-template-columns: repeat(5, 1fr); padding: 6px;
+      display: flex; padding: 6px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.45); z-index: 50;
     }
     .nav-item {
+      flex: 1;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       padding: 6px 2px; border-radius: 14px; cursor: pointer; color: var(--muted);
       font-size: 10.5px; font-weight: 600; transition: all .2s ease;
@@ -426,6 +427,38 @@
         </div>
       </div>
     </div>
+
+    <!-- PAGE 6: ADMIN -->
+    <div id="page-admin" class="page">
+      <div id="admDemoBanner" class="card hero-card" style="display:none">
+        <strong>🧪 پنل ادمین (حالت تست و نمایشی)</strong>
+        <div class="muted" style="margin-top:4px">ارقام به‌صورت تصادفی نمایش داده می‌شوند و تغییر تنظیمات در حالت تست غیرفعال است.</div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-box"><div class="lbl">👥 کل کاربران</div><div class="val" id="admUsers">0</div></div>
+        <div class="stat-box"><div class="lbl">💰 فروش کل</div><div class="val" id="admTotal">0 ت</div></div>
+        <div class="stat-box"><div class="lbl">⏳ سفارش در انتظار</div><div class="val" id="admPend">0</div></div>
+        <div class="stat-box"><div class="lbl">✅ تاییدشده</div><div class="val" id="admAppr">0</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span>⚙️ تنظیمات سریع</span><button class="btn btn-sm" onclick="loadBootstrap()">🔄</button></div>
+        <label>قیمت پایه هر گیگ (تومان):</label>
+        <input id="admPrice" type="number" />
+        <label>تخفیف تمدید (٪):</label>
+        <input id="admRenewDisc" type="number" />
+        <label>تخفیف کمپین همگانی (٪):</label>
+        <input id="admGlobalDisc" type="number" />
+        <button class="btn btn-primary" style="margin-top:10px" onclick="saveAdminSettings()">💾 ذخیره تنظیمات</button>
+      </div>
+      <div class="card">
+        <div class="card-title"><span>⏳ سفارش‌های در انتظار</span></div>
+        <div id="admOrdersList" class="muted">موردی نیست.</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span>🎫 تیکت‌های باز کاربران</span></div>
+        <div id="admTicketsList" class="muted">موردی نیست.</div>
+      </div>
+    </div>
   </div>
 
   <!-- Bottom Navigation -->
@@ -435,6 +468,7 @@
     <div class="nav-item" data-tab="subs" onclick="goTab('subs')"><div class="ico">📲</div><div>سرویس‌ها</div></div>
     <div class="nav-item" data-tab="wallet" onclick="goTab('wallet')"><div class="ico">👛</div><div>کیف پول</div></div>
     <div class="nav-item" data-tab="tickets" onclick="goTab('tickets')"><div class="ico">🎫</div><div>تیکت</div></div>
+    <div id="navAdmin" class="nav-item" style="display:none" data-tab="admin" onclick="goTab('admin')"><div class="ico">👑</div><div>ادمین</div></div>
   </div>
 
   <script>
@@ -486,6 +520,7 @@
         document.getElementById('walletBalBig').innerText = balStr;
         document.getElementById('homeSubsCnt').innerText = `${state.subs.length} عدد`;
         document.getElementById('refLinkBox').innerText = d.referral_link || '';
+        renderAdmin(d.admin_data, d.user);
         renderGbGrid();
         renderSubs();
         renderTickets();
@@ -749,6 +784,50 @@
         showToast('🔒 تیکت بسته شد');
         await loadBootstrap();
         openTicket(state.activeTicketId);
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    function renderAdmin(adm, usr) {
+      const nav = document.getElementById('navAdmin');
+      if (!usr?.is_admin || !adm) { nav.style.display = 'none'; return; }
+      nav.style.display = 'flex';
+      document.getElementById('admDemoBanner').style.display = usr.is_demo ? 'block' : 'none';
+      document.getElementById('admUsers').innerText = (adm.users_count || 0).toLocaleString();
+      document.getElementById('admTotal').innerText = `${(adm.total_toman || 0).toLocaleString()} ت`;
+      document.getElementById('admPend').innerText = adm.pending_count || 0;
+      document.getElementById('admAppr').innerText = (adm.approved_count || 0).toLocaleString();
+      document.getElementById('admPrice').value = adm.base_price_per_gb || 15000;
+      document.getElementById('admRenewDisc').value = adm.renew_discount_pct || 0;
+      document.getElementById('admGlobalDisc').value = adm.global_discount_pct || 0;
+      const oBox = document.getElementById('admOrdersList');
+      const orders = adm.pending_orders || [];
+      oBox.innerHTML = orders.length ? orders.map(o => `<div class="stat-box" style="margin-bottom:6px"><strong>#${o.id}</strong> • ${o.gb}GB / ${o.months}M • ${(o.total_toman||0).toLocaleString()} ت<div class="muted">کاربر: ${o.user_id} | روش: ${o.pay_method}</div></div>`).join('') : '<div class="muted">سفارش معلقی نیست.</div>';
+      const tBox = document.getElementById('admTicketsList');
+      const tks = adm.open_tickets || [];
+      tBox.innerHTML = tks.length ? tks.map(t => `<div class="stat-box" style="margin-bottom:6px"><strong>#${t.id} • ${t.subject}</strong><div class="muted">کاربر: ${t.user_id}</div><div class="btn-row" style="margin-top:6px"><input id="admTkIn_${t.id}" placeholder="پاسخ..." /><button class="btn btn-primary btn-sm" onclick="admReplyTicket('${t.id}')">ارسال</button></div></div>`).join('') : '<div class="muted">تیکت بازی نیست.</div>';
+    }
+
+    async function saveAdminSettings() {
+      try {
+        const res = await api('admin/save_settings', 'POST', {
+          base_price_per_gb: parseInt(document.getElementById('admPrice').value),
+          renew_discount_pct: parseFloat(document.getElementById('admRenewDisc').value),
+          global_discount_pct: parseFloat(document.getElementById('admGlobalDisc').value),
+        });
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admReplyTicket(tid) {
+      const inp = document.getElementById('admTkIn_' + tid);
+      const text = inp?.value.trim();
+      if (!text) return showToast('متن پاسخ را بنویسید');
+      try {
+        const res = await api('admin/ticket_reply', 'POST', { ticket_id: tid, text });
+        inp.value = '';
+        showToast(res.message);
+        await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
