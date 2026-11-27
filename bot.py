@@ -675,6 +675,26 @@ def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
         return True, new_bal
 
 
+def is_user_blocked(user_id: int) -> tuple[bool, int]:
+    """Returns (blocked, remaining_seconds; 0 means permanent/manual block)."""
+    uid = str(user_id)
+    now = int(time.time())
+    with users_lock:
+        users = load_json(USERS_PATH)
+        u = users.get(uid)
+        if not u or not u.get("blocked"):
+            return False, 0
+        until = int(u.get("blocked_until") or 0)
+        if until > 0:
+            if now >= until:
+                u["blocked"] = False
+                u["blocked_until"] = 0
+                save_json(USERS_PATH, users)
+                return False, 0
+            return True, until - now
+        return True, 0
+
+
 def get_reseller(user_id: int) -> dict | None:
     with resellers_lock:
         rec = load_json(RESELLERS_PATH).get(str(user_id))
@@ -1393,10 +1413,14 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
     t = m["text"].strip()
 
     if user_id not in get_admin_ids(env):
-        with users_lock:
-            if load_json(USERS_PATH).get(str(user_id), {}).get("blocked"):
-                send_message(token, chat_id, "⛔ حساب شما به دلیل ارسال رسید نامعتبر مسدود شده است.")
-                return
+        blk, rem = is_user_blocked(user_id)
+        if blk:
+            if rem > 0:
+                hrs = max(1, (rem + 3599) // 3600)
+                send_message(token, chat_id, f"⛔ حساب شما به دلیل ارسال رسید نامعتبر به مدت <b>{hrs} ساعت</b> دیگر مسدود است.")
+            else:
+                send_message(token, chat_id, "⛔ حساب شما توسط مدیریت مسدود شده است.")
+            return
 
     if t in ("/help", BTN_HELP, "/guide"):
         user_states.pop(user_id, None)
@@ -1888,11 +1912,18 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 u_rec = users.get(str(target_uid), {})
                 u_orders = [o for o in orders.values() if o.get("user_id") == target_uid]
                 app_cnt = sum(1 for o in u_orders if o.get("status") == "approved")
+                blk, rem = is_user_blocked(target_uid)
+                blk_s = f"⛔ مسدود ({max(1, (rem + 3599)//3600)} ساعت مانده)" if (blk and rem > 0) else ("⛔ مسدود دستی" if blk else "🟢 آزاد")
                 lines.append(
                     f"👤 تلگرام: <code>{target_uid}</code> (@{html.escape(str(u_rec.get('username') or '-'))})\n"
-                    f"👛 کیف پول: <b>{int(u_rec.get('balance_toman', 0)):,} تومان</b> | سفارش موفق: <b>{app_cnt}</b>"
+                    f"👛 کیف پول: <b>{int(u_rec.get('balance_toman', 0)):,} تومان</b> | سفارش موفق: <b>{app_cnt}</b>\n"
+                    f"🛡 وضعیت ربات: <b>{blk_s}</b>"
                 )
-                kb_rows.append([{"text": "👛 تغییر کیف پول", "callback_data": f"adm_u_wallet:{target_uid}"}])
+                blk_btn_txt = "🔓 رفع مسدودیت ربات" if blk else "⛔ مسدود در ربات"
+                kb_rows.append([
+                    {"text": "👛 تغییر کیف پول", "callback_data": f"adm_u_wallet:{target_uid}"},
+                    {"text": blk_btn_txt, "callback_data": f"adm_u_botblock:{target_uid}"},
+                ])
             if target_uname:
                 try:
                     pu = panel_request(env, f"/api/user/{urllib.parse.quote(target_uname)}")
@@ -2106,10 +2137,11 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
     msg_id = msg["message_id"]
 
     if user_id not in get_admin_ids(env):
-        with users_lock:
-            if load_json(USERS_PATH).get(str(user_id), {}).get("blocked"):
-                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "حساب شما مسدود است", "show_alert": True})
-                return
+        blk, rem = is_user_blocked(user_id)
+        if blk:
+            txt_b = f"حساب شما تا {max(1, (rem + 3599)//3600)} ساعت دیگر مسدود است" if rem > 0 else "حساب شما توسط مدیریت مسدود است"
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": txt_b, "show_alert": True})
+            return
 
     if data == "buy_restart":
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -2879,6 +2911,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             users = load_json(USERS_PATH)
             u_rec = users.setdefault(str(target_uid), {"first_seen": int(time.time()), "last_seen": int(time.time())})
             u_rec["blocked"] = True
+            u_rec["blocked_until"] = int(time.time()) + 86400
             save_json(USERS_PATH, users)
 
         action_note = ""
@@ -2897,9 +2930,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
         except Exception:
             pass
-        send_message(token, chat_id, f"🚫 سفارش <code>#{order_id}</code> به عنوان فیش جعلی ثبت شد.\n• {action_note}\n• کاربر <code>{target_uid}</code> مسدود گردید.")
+        send_message(token, chat_id, f"🚫 سفارش <code>#{order_id}</code> به عنوان فیش جعلی ثبت شد.\n• {action_note}\n• کاربر <code>{target_uid}</code> به مدت <b>۲۴ ساعت (۱ روز)</b> مسدود گردید.")
         try:
-            send_message(token, target_uid, f"🚫 سفارش <code>#{order_id}</code> به دلیل عدم تایید واریز لغو و اشتراک شما مسدود شد.")
+            send_message(token, target_uid, f"🚫 سفارش <code>#{order_id}</code> به دلیل عدم تایید واریز لغو، اشتراک شما قطع و دسترسی شما به مدت <b>۲۴ ساعت</b> مسدود شد.")
         except Exception:
             pass
         return
@@ -2928,6 +2961,33 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {"step": "await_find_user"}
         send_message(token, chat_id, "🔍 آیدی عددی تلگرام کاربر یا نام کاربری اکانت پنل (مثلاً <code>u_a1b2c3d4</code>) را بفرستید:", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_u_botblock:"):
+        if user_id not in get_admin_ids(env):
+            return
+        t_uid = int(data.split(":", 1)[1])
+        blk, _ = is_user_blocked(t_uid)
+        with users_lock:
+            users = load_json(USERS_PATH)
+            u_rec = users.setdefault(str(t_uid), {"first_seen": int(time.time()), "last_seen": int(time.time())})
+            u_rec["blocked"] = not blk
+            u_rec["blocked_until"] = 0
+            save_json(USERS_PATH, users)
+        if blk:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🔓 مسدودیت رفع شد"})
+            send_message(token, chat_id, f"🔓 مسدودیت کاربر <code>{t_uid}</code> در ربات رفع شد.", env=env, user_id=user_id)
+            try:
+                send_message(token, t_uid, "✅ مسدودیت حساب شما توسط مدیریت رفع شد و می‌توانید دوباره از ربات استفاده کنید.", env=env, user_id=t_uid)
+            except Exception:
+                pass
+        else:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ کاربر مسدود شد"})
+            send_message(token, chat_id, f"⛔ کاربر <code>{t_uid}</code> به‌صورت دستی در ربات مسدود شد.", env=env, user_id=user_id)
+            try:
+                send_message(token, t_uid, "⛔ دسترسی شما به ربات توسط مدیریت مسدود شد.")
+            except Exception:
+                pass
         return
 
     if data.startswith("adm_u_wallet:"):
