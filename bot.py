@@ -193,6 +193,10 @@ def get_settings(env: dict[str, str]) -> dict:
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
+        "panel_url": env.get("PANEL_URL", ""),
+        "panel_user": env.get("PANEL_USER", ""),
+        "panel_pass": env.get("PANEL_PASS", ""),
+        "group_id": int(env.get("GROUP_ID", "1") or 1),
     }
     with settings_lock:
         saved = load_json(SETTINGS_PATH)
@@ -205,6 +209,10 @@ def update_setting(env: dict[str, str], key: str, value) -> dict:
         cur = load_json(SETTINGS_PATH)
         cur[key] = value
         save_json(SETTINGS_PATH, cur)
+    if key in ("panel_url", "panel_user", "panel_pass"):
+        with panel_lock:
+            panel_token_cache["token"] = ""
+            panel_token_cache["ts"] = 0.0
     return get_settings(env)
 
 
@@ -378,11 +386,14 @@ def verify_bsc_usdt_tx(tx_hash: str, expected_to: str, min_usdt: float) -> tuple
 
 def panel_get_token(env: dict[str, str], force_refresh: bool = False) -> str:
     now = time.time()
+    cfg = get_settings(env)
     with panel_lock:
         if not force_refresh and panel_token_cache["token"] and now - panel_token_cache["ts"] < 1800:
             return panel_token_cache["token"]
-        base = env["PANEL_URL"].rstrip("/")
-        form = urllib.parse.urlencode({"username": env["PANEL_USER"], "password": env["PANEL_PASS"]}).encode("utf-8")
+        base = str(cfg["panel_url"]).rstrip("/")
+        if not base or "your-panel-domain" in base:
+            raise RuntimeError("آدرس پنل هنوز در پنل ادمین تنظیم نشده است")
+        form = urllib.parse.urlencode({"username": str(cfg["panel_user"]), "password": str(cfg["panel_pass"])}).encode("utf-8")
         req = urllib.request.Request(
             f"{base}/api/admin/token",
             data=form,
@@ -398,7 +409,7 @@ def panel_get_token(env: dict[str, str], force_refresh: bool = False) -> str:
 
 
 def panel_request(env: dict[str, str], path: str, method: str = "GET", body: dict | None = None) -> dict:
-    base = env["PANEL_URL"].rstrip("/")
+    base = str(get_settings(env)["panel_url"]).rstrip("/")
     for attempt in range(2):
         tok = panel_get_token(env, force_refresh=(attempt == 1))
         headers = {"Authorization": f"Bearer {tok}", "User-Agent": "Mozilla/5.0 (compatible; SalesBot/1.0)"}
@@ -427,7 +438,7 @@ def create_panel_user(
     hours: int | None = None,
     custom_prefix: str | None = None,
 ) -> dict:
-    group_id = int(env.get("GROUP_ID", "1"))
+    group_id = int(get_settings(env).get("group_id", 1))
     data_limit = gb * 1024 * 1024 * 1024
     duration_sec = (hours * 3600) if hours is not None else (months * 30 * 86400)
     expire = int(time.time()) + duration_sec
@@ -457,7 +468,7 @@ def resolve_user_for_renew(env: dict[str, str], text: str) -> dict:
     m = re.search(r"/sub/([A-Za-z0-9._\-]+)", t)
     if m:
         sub_tok = m.group(1)
-        base = env["PANEL_URL"].rstrip("/")
+        base = str(get_settings(env)["panel_url"]).rstrip("/")
         req = urllib.request.Request(
             f"{base}/sub/{sub_tok}/info",
             headers={"User-Agent": "Mozilla/5.0 (compatible; SalesBot/1.0)"},
@@ -755,7 +766,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• تست رایگان: <code>{trial_s}</code>\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
-        f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n\n"
+        f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
+        f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه: <code>{cfg['group_id']}</code>)\n\n"
         "برای تغییر هر مورد روی دکمهٔ مربوطه بزنید:"
     )
     kb = {
@@ -768,6 +780,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "⏳ روز یادآور انقضا", "callback_data": "adm_set:reminder_days"}, {"text": "📉 درصد حجم یادآور", "callback_data": "adm_set:reminder_pct"}],
             [{"text": "💳 تغییر شماره کارت", "callback_data": "adm_set:card_number"}, {"text": "👤 تغییر نام صاحب کارت", "callback_data": "adm_set:card_owner"}],
             [{"text": "🪙 آدرس تتر BEP20", "callback_data": "adm_set:usdt_bep20"}, {"text": "🎟 مدیریت کد تخفیف", "callback_data": "adm_coupons"}],
+            [{"text": "🌐 آدرس پنل", "callback_data": "adm_set:panel_url"}, {"text": "👤 یوزر پنل", "callback_data": "adm_set:panel_user"}],
+            [{"text": "🔑 رمز پنل", "callback_data": "adm_set:panel_pass"}, {"text": "👥 آیدی گروه پنل", "callback_data": "adm_set:group_id"}],
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
             [{"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}, {"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}],
             [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
@@ -907,10 +921,11 @@ def fulfill_approved_order(token: str, env: dict[str, str], order_id: str, order
         )
         return f"wallet+{amt}"
 
+    panel_base = str(get_settings(env)["panel_url"]).rstrip("/")
     if order.get("type") == "renew" and order.get("target_username"):
         u = renew_panel_user(env, order["target_username"], order["gb"], order["months"])
         sub_path = u["subscription_url"]
-        full_sub = f"{env['PANEL_URL'].rstrip('/')}{sub_path}"
+        full_sub = f"{panel_base}{sub_path}"
         uname = u["username"]
         new_gb = round((u.get("data_limit") or 0) / (1024**3), 2)
         caption = (
@@ -923,7 +938,7 @@ def fulfill_approved_order(token: str, env: dict[str, str], order_id: str, order
     else:
         u = create_panel_user(env, order_id, order["user_id"], order["gb"], order["months"], order["pay_method"])
         sub_path = u["subscription_url"]
-        full_sub = f"{env['PANEL_URL'].rstrip('/')}{sub_path}"
+        full_sub = f"{panel_base}{sub_path}"
         uname = u["username"]
         caption = (
             f"🎉 <b>اشتراک شما آماده است!</b>\n\n"
@@ -1202,7 +1217,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 hours=trial_hours,
                 custom_prefix=f"trial_{user_id}",
             )
-            full_sub = f"{env['PANEL_URL'].rstrip('/')}{u['subscription_url']}"
+            full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
             uname = u["username"]
             caption = (
                 f"🎁 <b>اشتراک تست رایگان شما آماده است!</b>\n\n"
@@ -1524,7 +1539,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             user_states.pop(user_id, None)
             key = st["key"]
             try:
-                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days"):
+                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id"):
                     val = int(t.replace(",", "").strip())
                     if val <= 0:
                         raise ValueError("باید مثبت باشد")
@@ -1653,9 +1668,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         amt = int(amt_s)
         rate = get_usdt_toman_rate()
         usdt_amt = round(amt / rate, 2)
+        cfg = get_settings(env)
+        if method == "card" and str(cfg["card_number"]).strip("0") == "":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "شماره کارت هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
+            return
+        if method == "usdt" and str(cfg["usdt_bep20"]).lower().startswith("0x000000000"):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "آدرس تتر هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
+            return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {"step": "await_receipt", "is_topup": True, "topup_toman": amt, "pay_method": method}
-        cfg = get_settings(env)
         if method == "card":
             txt = (
                 "💳 <b>شارژ کیف پول (کارت‌به‌کارت)</b>\n\n"
@@ -1682,10 +1703,11 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "دسترسی ندارید", "show_alert": True})
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        cfg = get_settings(env)
         try:
             if action == "sub_revoke":
                 u = panel_request(env, f"/api/user/{urllib.parse.quote(uname)}/revoke_sub", method="POST")
-                full_sub = f"{env['PANEL_URL'].rstrip('/')}{u['subscription_url']}"
+                full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
                 with orders_lock:
                     orders = load_json(ORDERS_PATH)
                     for o in orders.values():
@@ -1719,7 +1741,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                     user_id=user_id,
                 )
             else:
-                full_sub = f"{env['PANEL_URL'].rstrip('/')}{u['subscription_url']}"
+                full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
                 send_qr_with_sub(
                     token,
                     chat_id,
@@ -1793,6 +1815,13 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                     save_json(ORDERS_PATH, orders)
                 send_message(token, chat_id, f"❌ خطا در ساخت اشتراک (مبلغ به کیف پول برگشت خورد): {html.escape(str(e))}", env=env, user_id=user_id)
             return
+        cfg = get_settings(env)
+        if method == "card" and str(cfg["card_number"]).strip("0") == "":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "شماره کارت هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
+            return
+        if method == "usdt" and str(cfg["usdt_bep20"]).lower().startswith("0x000000000"):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "آدرس تتر هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
+            return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {
             "step": "await_receipt",
@@ -1803,7 +1832,6 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "coupon_code": coupon_code,
             "coupon_pct": coupon_pct,
         }
-        cfg = get_settings(env)
         if method == "card":
             txt = (
                 "💳 <b>پرداخت کارت‌به‌کارت</b>\n\n"
@@ -1991,6 +2019,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "card_number": "شماره کارت جدید",
             "card_owner": "نام صاحب کارت جدید",
             "usdt_bep20": "آدرس تتر BEP20 جدید",
+            "panel_url": "آدرس پنل (مثلاً https://panel.example.com:8443)",
+            "panel_user": "نام کاربری ادمین پنل",
+            "panel_pass": "رمز عبور ادمین پنل",
+            "group_id": "آیدی عددی گروه پنل (پیش‌فرض 1)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
