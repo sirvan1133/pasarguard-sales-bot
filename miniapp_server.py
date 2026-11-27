@@ -21,8 +21,20 @@ log = logging.getLogger("miniapp")
 
 WEBAPP_HTML = Path(__file__).resolve().parent / "webapp" / "index.html"
 TICKETS_PATH = bot.DATA_DIR / "tickets.json"
+DEMO_ENV_PATH = Path("/opt/sales-bot-demo/.env")
 LISTEN_HOST = os.environ.get("MINIAPP_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("MINIAPP_PORT", "8765"))
+
+
+def load_demo_token(env: dict[str, str]) -> str:
+    tok = (env.get("DEMO_BOT_TOKEN") or "").strip()
+    if tok:
+        return tok
+    if DEMO_ENV_PATH.exists():
+        for line in DEMO_ENV_PATH.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("BOT_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    return ""
 
 
 def verify_tg_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -158,13 +170,18 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(ln).decode("utf-8"))
 
-    def _auth_user(self, env: dict[str, str]) -> dict | None:
+    def _auth_user(self, env: dict[str, str]) -> tuple[dict, bool] | tuple[None, bool]:
         init_data = self.headers.get("X-Tg-Init-Data", "")
         u = verify_tg_init_data(init_data, env["BOT_TOKEN"])
-        if not u or not u.get("id"):
-            self._send_json(401, {"error": "احراز هویت تلگرام نامعتبر است. لطفاً از داخل ربات باز کنید."})
-            return None
-        return u
+        if u and u.get("id"):
+            return u, False
+        demo_tok = load_demo_token(env)
+        if demo_tok:
+            u2 = verify_tg_init_data(init_data, demo_tok)
+            if u2 and u2.get("id"):
+                return u2, True
+        self._send_json(401, {"error": "احراز هویت تلگرام نامعتبر است. لطفاً از داخل ربات باز کنید."})
+        return None, False
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -202,13 +219,41 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             return
 
         env = bot.load_env()
-        u = self._auth_user(env)
+        u, is_demo = self._auth_user(env)
         if not u:
             return
         uid = int(u["id"])
 
         if path == "/vpnapp/api/bootstrap":
             cfg = bot.get_settings(env)
+            if is_demo:
+                import random
+                return self._send_json(200, {
+                    "user": {
+                        "id": uid,
+                        "first_name": u.get("first_name", "") + " (حالت تست)",
+                        "username": u.get("username", ""),
+                        "balance": random.choice([850000, 1250000, 2400000]),
+                    },
+                    "settings": {"gb_options": cfg.get("gb_options", bot.DEFAULT_GB_OPTIONS)},
+                    "payment": {
+                        "card_number": "6037-99**-****-1234",
+                        "card_owner": "حساب نمایشی تست",
+                        "usdt_bep20": "0xDEMO00000000000000000000000000000000DEMO",
+                    },
+                    "subs": [
+                        {
+                            "username": f"demo_{uid % 10000}",
+                            "sub_url": "https://demo-sub.example.com/sub/demo12345",
+                            "limit_gb": 50,
+                            "used_gb": round(random.uniform(6.5, 38.0), 2),
+                            "status": "active",
+                            "expire_text": "2027-01-15",
+                        }
+                    ],
+                    "tickets": get_user_tickets(uid),
+                    "referral_link": f"https://t.me/pasarguardsalesbot?start=ref_{uid}",
+                })
             bot_u = env.get("BOT_USERNAME") or "vpnnnVipbot"
             self._send_json(200, {
                 "user": {
@@ -237,13 +282,16 @@ class MiniAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         env = bot.load_env()
-        u = self._auth_user(env)
+        u, is_demo = self._auth_user(env)
         if not u:
             return
         uid = int(u["id"])
-        token = env["BOT_TOKEN"]
+        token = load_demo_token(env) if is_demo else env["BOT_TOKEN"]
         path = urllib.parse.urlparse(self.path).path
         body = self._read_json()
+
+        if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping"):
+            return self._send_json(200, {"ok": True, "message": "🧪 این عملیات در حالت تست و نمایشی شبیه‌سازی شد (تغییری در سرور واقعی ثبت نشد)."})
 
         if path == "/vpnapp/api/calc":
             gb = max(1, min(5000, int(body.get("gb") or 30)))

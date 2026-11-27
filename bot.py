@@ -152,7 +152,7 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         return {"remove_keyboard": True}
     miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
     rows = []
-    if miniapp_url and not is_tenant_bot(env) and not is_demo_mode(env):
+    if miniapp_url and not is_tenant_bot(env):
         rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}}])
     rows.extend([
         [{"text": BTN_BUY}],
@@ -172,7 +172,7 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
     res_lbl = "💼 پنل نمایندگی" if is_res else "🤝 درخواست نمایندگی"
     miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
     rows = []
-    if miniapp_url and not is_tenant_bot(env) and not is_demo_mode(env):
+    if miniapp_url and not is_tenant_bot(env):
         rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}, "style": "primary"}])
     rows.extend([
         [{"text": "🛒 خرید سرویس جدید", "callback_data": "home:buy", "style": "success"}],
