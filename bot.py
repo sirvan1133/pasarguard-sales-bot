@@ -727,6 +727,22 @@ def tg_send_document(token: str, chat_id: int, doc_path: Path, caption: str = ""
         return json.loads(resp.read().decode("utf-8")).get("result")
 
 
+def resolve_tg_user_id(target: str) -> int | None:
+    """Resolve a numeric Telegram ID or @username from users.json."""
+    t = target.strip()
+    if t.isdigit():
+        return int(t)
+    uname = t.lstrip("@").lower()
+    if not uname:
+        return None
+    with users_file_lock(USERS_PATH):
+        users = load_json(USERS_PATH)
+        for uid_s, rec in users.items():
+            if str(rec.get("username") or "").lstrip("@").lower() == uname and uid_s.isdigit():
+                return int(uid_s)
+    return None
+
+
 def get_wallet_balance(user_id: int) -> int:
     with users_lock:
         return int(load_json(USERS_PATH).get(str(user_id), {}).get("balance_toman", 0))
@@ -2123,20 +2139,23 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
         if step == "await_wallet_transfer":
             parts = t.split()
-            if len(parts) != 2 or not parts[0].isdigit() or not parts[1].replace(",", "").isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 50000</code> (دوباره بفرستید):", env=env, user_id=user_id)
+            if len(parts) != 2 or not parts[1].replace(",", "").isdigit():
+                send_message(token, chat_id, "❌ فرمت صحیح:\n<code>@username 50000</code> یا <code>123456789 50000</code>\nدوباره بفرستید:", env=env, user_id=user_id)
                 return
-            t_uid = int(parts[0])
+            t_uid = resolve_tg_user_id(parts[0])
+            if t_uid is None:
+                send_message(token, chat_id, "❌ کاربری با این آیدی یا @یوزرنیم در ربات پیدا نشد (طرف مقابل باید حداقل یک بار ربات را استارت زده باشد). دوباره بفرستید:", env=env, user_id=user_id)
+                return
             amt = int(parts[1].replace(",", ""))
             if t_uid == user_id or amt < 10000:
-                send_message(token, chat_id, "❌ آیدی مقصد نباید خودتان باشد و حداقل مبلغ انتقال <b>۱۰,۰۰۰ تومان</b> است. دوباره بفرستید:", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ مقصد نباید خودتان باشد و حداقل مبلغ انتقال <b>۱۰,۰۰۰ تومان</b> است. دوباره بفرستید:", env=env, user_id=user_id)
                 return
-            ok_bal, new_bal = adjust_wallet_balance(user_id, -amt)
+            ok_bal, new_bal = adjust_wallet_balance(user_id, -amt, note=f"انتقال به {t_uid}")
             if not ok_bal:
                 send_message(token, chat_id, f"❌ موجودی کیف پول کافی نیست (موجودی: <b>{new_bal:,} تومان</b>). مبلغ دیگری بفرستید:", env=env, user_id=user_id)
                 return
             user_states.pop(user_id, None)
-            _, rec_bal = adjust_wallet_balance(t_uid, amt)
+            _, rec_bal = adjust_wallet_balance(t_uid, amt, note=f"دریافت از {user_id}")
             send_message(token, chat_id, f"✅ مبلغ <b>{amt:,} تومان</b> به کاربر <code>{t_uid}</code> منتقل شد.\n👛 موجودی فعلی شما: <b>{new_bal:,} تومان</b>", env=env, user_id=user_id)
             try:
                 send_message(token, t_uid, f"💸 مبلغ <b>{amt:,} تومان</b> از طرف کاربر <code>{user_id}</code> به کیف پول شما منتقل شد.\n👛 موجودی فعلی: <b>{rec_bal:,} تومان</b>", env=env, user_id=t_uid)
@@ -2173,11 +2192,14 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
         if step == "await_admin_wallet" and user_id in get_admin_ids(env):
             parts = t.split()
-            if len(parts) != 2 or not parts[0].isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code> (دوباره بفرستید):", env=env, user_id=user_id)
+            if len(parts) != 2:
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>@username 100000</code> یا <code>USER_ID AMOUNT</code> (دوباره بفرستید):", env=env, user_id=user_id)
+                return
+            t_uid = resolve_tg_user_id(parts[0])
+            if t_uid is None:
+                send_message(token, chat_id, "❌ کاربر با این آیدی یا @یوزرنیم پیدا نشد. دوباره بفرستید:", env=env, user_id=user_id)
                 return
             try:
-                t_uid = int(parts[0])
                 delta = int(parts[1].replace(",", ""))
                 ok, new_bal = adjust_wallet_balance(t_uid, delta)
                 if not ok:
@@ -2260,8 +2282,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             q = t.strip()
             orders = load_json(ORDERS_PATH)
             users = load_json(USERS_PATH)
-            target_uid = int(q) if q.isdigit() else None
-            target_uname = "" if q.isdigit() else q
+            target_uid = resolve_tg_user_id(q) if (q.isdigit() or q.startswith("@")) else None
+            target_uname = "" if target_uid is not None else q
             if target_uid is None:
                 for o in orders.values():
                     if o.get("panel_username") == target_uname:
@@ -2436,11 +2458,14 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
         if step == "await_admin_reseller_add" and user_id in get_admin_ids(env):
             parts = t.split()
-            if not parts or not parts[0].isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID [PRICE_PER_GB]</code>\nمثال: <code>123456789 5000</code> (دوباره بفرستید):", env=env, user_id=user_id)
+            if not parts:
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>@username [PRICE]</code> یا <code>USER_ID [PRICE]</code> (دوباره بفرستید):", env=env, user_id=user_id)
+                return
+            t_uid = resolve_tg_user_id(parts[0])
+            if t_uid is None:
+                send_message(token, chat_id, "❌ کاربر با این آیدی یا @یوزرنیم پیدا نشد. دوباره بفرستید:", env=env, user_id=user_id)
                 return
             user_states.pop(user_id, None)
-            t_uid = int(parts[0])
             ppg = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
             set_reseller(t_uid, active=True, price_per_gb=ppg)
             send_message(token, chat_id, f"✅ کاربر <code>{t_uid}</code> به عنوان نماینده فعال شد.", env=env, user_id=user_id)
@@ -3058,7 +3083,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         send_message(
             token,
             chat_id,
-            "💸 آیدی عددی تلگرام مقصد و مبلغ (به تومان) را بفرستید:\n<code>USER_ID AMOUNT</code>\nمثال: <code>123456789 50000</code>",
+            "💸 <b>@یوزرنیم</b> یا <b>آیدی عددی</b> مقصد را همراه با مبلغ (به تومان) بفرستید:\n"
+            "• <code>@username 50000</code>\n"
+            "• <code>123456789 50000</code>",
             env=env,
             user_id=user_id,
         )
