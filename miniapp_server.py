@@ -24,6 +24,7 @@ TICKETS_PATH = bot.DATA_DIR / "tickets.json"
 DEMO_ENV_PATH = Path("/opt/sales-bot-demo/.env")
 LISTEN_HOST = os.environ.get("MINIAPP_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("MINIAPP_PORT", "8765"))
+DEMO_GREETED_UIDS: set[int] = set()
 
 
 def load_demo_token(env: dict[str, str]) -> str:
@@ -228,6 +229,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             cfg = bot.get_settings(env)
             if is_demo:
                 import random
+                if uid not in DEMO_GREETED_UIDS:
+                    DEMO_GREETED_UIDS.add(uid)
+                    try:
+                        demo_env = dict(env)
+                        demo_env["DEMO_MODE"] = "1"
+                        demo_env["BOT_TOKEN"] = load_demo_token(env)
+                        bot.send_message(demo_env["BOT_TOKEN"], uid, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=bot.build_home_inline_keyboard(uid, demo_env))
+                    except Exception:
+                        pass
                 return self._send_json(200, {
                     "user": {
                         "id": uid,
@@ -255,6 +265,19 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     "referral_link": f"https://t.me/pasarguardsalesbot?start=ref_{uid}",
                 })
             bot_u = env.get("BOT_USERNAME") or "vpnnnVipbot"
+            with bot.users_file_lock(bot.USERS_PATH):
+                users = bot.load_json(bot.USERS_PATH)
+                urec = users.get(str(uid), {})
+                need_greet = not urec.get("miniapp_greeted")
+                if need_greet:
+                    urec = users.setdefault(str(uid), {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": u.get("username", "")})
+                    urec["miniapp_greeted"] = True
+                    bot.save_json(bot.USERS_PATH, users)
+            if need_greet:
+                try:
+                    bot.send_message(env["BOT_TOKEN"], uid, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=bot.build_home_inline_keyboard(uid, env))
+                except Exception:
+                    pass
             self._send_json(200, {
                 "user": {
                     "id": uid,
@@ -289,6 +312,14 @@ class MiniAppHandler(BaseHTTPRequestHandler):
         token = load_demo_token(env) if is_demo else env["BOT_TOKEN"]
         path = urllib.parse.urlparse(self.path).path
         body = self._read_json()
+
+        if path == "/vpnapp/api/send_menu":
+            target_env = dict(env)
+            if is_demo:
+                target_env["DEMO_MODE"] = "1"
+                target_env["BOT_TOKEN"] = token
+            bot.send_message(token, uid, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=bot.build_home_inline_keyboard(uid, target_env))
+            return self._send_json(200, {"ok": True})
 
         if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping"):
             return self._send_json(200, {"ok": True, "message": "🧪 این عملیات در حالت تست و نمایشی شبیه‌سازی شد (تغییری در سرور واقعی ثبت نشد)."})

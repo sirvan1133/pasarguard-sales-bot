@@ -273,7 +273,8 @@
           <button class="btn" onclick="goTab('subs')">📊 وضعیت سرویس‌ها</button>
           <button class="btn" onclick="goTab('wallet')">👛 شارژ و انتقال</button>
         </div>
-        <button class="btn btn-success" onclick="claimTrial()">🎁 دریافت تست رایگان</button>
+        <button class="btn btn-success" style="margin-bottom:8px" onclick="claimTrial()">🎁 دریافت تست رایگان</button>
+        <button class="btn" onclick="sendBotMenu()">💬 نمایش منوی ربات در چت</button>
       </div>
     </div>
 
@@ -645,6 +646,14 @@
         const res = await api('trial', 'POST', {});
         showToast('🎁 ' + res.message);
         await loadBootstrap(); goTab('subs');
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function sendBotMenu() {
+      try {
+        await api('send_menu', 'POST', {});
+        showToast('📌 منو در چت ربات ارسال شد');
+        if (tg) setTimeout(() => tg.close(), 500);
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
