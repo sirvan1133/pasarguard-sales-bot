@@ -1070,7 +1070,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         rows = [[{"text": "💼 مدیریت زیرنمایندگان", "callback_data": "adm_resellers"}]]
         if parent_u:
             rows.append([{"text": f"➕ شارژ کیف پول بالادستی (@{parent_u})", "url": f"https://t.me/{parent_u}"}])
-        rows.append([{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}])
+        rows.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
         kb = {"inline_keyboard": rows}
         if message_id is not None:
             edit_message(token, chat_id, message_id, txt, reply_markup=kb)
@@ -1096,7 +1096,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
             "inline_keyboard": [
                 [{"text": f"➕ شارژ نمایندگی (حداقل {min_tmn:,} ت)", "callback_data": "reseller_topup"}],
                 [{"text": "📩 ارسال درخواست نمایندگی به ادمین", "callback_data": "reseller_apply"}],
-                [{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}],
+                [{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}],
             ]
         }
         if message_id is not None:
@@ -1123,7 +1123,7 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
             [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup"}],
             [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}, {"text": "📡 وضعیت سرورها", "callback_data": "res_nodes"}],
             [{"text": "🤖 ربات اختصاصی من (White-Label)", "callback_data": "res_subbot"}],
-            [{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}],
+            [{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}],
         ]
     }
     if message_id is not None:
@@ -1392,7 +1392,7 @@ def send_qr_with_sub(token: str, chat_id: int, sub_url: str, caption: str, env: 
         tmp_path = Path(tmp.name)
     try:
         subprocess.run(["qrencode", "-o", str(tmp_path), "-s", "10", "-m", "2", "--", sub_url], check=True, timeout=10)
-        kb = {"inline_keyboard": [[{"text": "📱 آموزش اتصال", "callback_data": "conn_guide"}, {"text": "🏠 برگشت به خانه", "callback_data": "home_back"}]]}
+        kb = {"inline_keyboard": [[{"text": "📱 آموزش اتصال", "callback_data": "conn_guide"}, {"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}]]}
         tg_send_photo(token, chat_id, tmp_path, caption=caption, reply_markup=kb)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -1405,7 +1405,7 @@ def build_gb_keyboard(prefix: str = "buy", env: dict[str, str] | None = None) ->
         for i in range(0, len(gb_list), 3)
     ]
     rows.append([{"text": "✏️ حجم دلخواه", "callback_data": f"{prefix}_gb:custom"}])
-    rows.append([{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}])
+    rows.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
     return {"inline_keyboard": rows}
 
 
@@ -1422,7 +1422,7 @@ def build_month_keyboard(gb: int, env: dict[str, str] | None = None, prefix: str
         [{"text": f"۳ ماهه (+{fmt(3)}٪)", "callback_data": f"{prefix}_m:{gb}:3"}, {"text": f"۶ ماهه (+{fmt(6)}٪)", "callback_data": f"{prefix}_m:{gb}:6"}],
         [{"text": f"۱۲ ماهه / ۱ سال (+{fmt(12)}٪)", "callback_data": f"{prefix}_m:{gb}:12"}],
         [{"text": f"✏️ مدت دلخواه ({pct_s}٪ هر ماه)", "callback_data": f"{prefix}_m:{gb}:custom"}, {"text": "🔙 تغییر حجم", "callback_data": f"{prefix}_restart"}],
-        [{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}],
+        [{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}],
     ]
     return {"inline_keyboard": rows}
 
@@ -1562,7 +1562,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     ])
     if not tenant:
         kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}])
-    kb_rows.append([{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}])
+    kb_rows.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
         edit_message(token, chat_id, message_id, txt, reply_markup=kb)
@@ -1624,7 +1624,7 @@ def show_invoice(
         [{"text": card_lbl, "callback_data": f"pay:card:{inv_id}"}],
         [{"text": "🪙 پرداخت تتر (BEP20 - تایید خودکار)", "callback_data": f"pay:usdt:{inv_id}"}],
         [{"text": "🎟 اعمال کد تخفیف", "callback_data": f"coupon:{inv_id}"}],
-        [{"text": "🔙 تغییر مدت", "callback_data": f"{prefix}_gb:{gb}"}, {"text": "🏠 برگشت به خانه", "callback_data": "home_back"}],
+        [{"text": "🔙 تغییر مدت", "callback_data": f"{prefix}_gb:{gb}"}, {"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}],
     ])
     kb = {"inline_keyboard": pay_rows}
     if message_id is not None:
@@ -2011,7 +2011,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             up_bal = get_upstream_balance(env) or 0
             sales_bal = get_sales_wallet_balance(user_id)
             parent_u = env.get("PARENT_BOT_USERNAME", "")
-            rows = [[{"text": "📜 گزارش تراکنش‌های فروش", "callback_data": "sales_ledger"}], [{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}]]
+            rows = [[{"text": "📜 گزارش تراکنش‌های فروش", "callback_data": "sales_ledger"}], [{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}]]
             if parent_u:
                 rows.insert(0, [{"text": f"➕ شارژ کیف پول بالادستی (@{parent_u})", "url": f"https://t.me/{parent_u}"}])
             send_message(
@@ -2031,7 +2031,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             "inline_keyboard": [
                 [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}, {"text": "💸 انتقال موجودی", "callback_data": "wallet_transfer"}],
                 [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}],
-                [{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}],
+                [{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}],
             ]
         }
         send_message(
@@ -2232,7 +2232,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 my_unames.append(un)
         buttons = [[{"text": f"🔄 {un}", "callback_data": f"ren_pick:{un}"}] for un in my_unames[:8]]
         buttons.append([{"text": "✏️ وارد کردن نام کاربری یا لینک ساب", "callback_data": "ren_custom"}])
-        buttons.append([{"text": "🏠 برگشت به خانه", "callback_data": "home_back"}])
+        buttons.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
         send_message(
             token,
             chat_id,
