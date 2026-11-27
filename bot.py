@@ -1355,8 +1355,9 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
         [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
         [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes"}],
-        [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
     ])
+    if not tenant:
+        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
         edit_message(token, chat_id, message_id, txt, reply_markup=kb)
