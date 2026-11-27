@@ -751,12 +751,58 @@ def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int, note: s
                 send_message(
                     p_tok,
                     user_id,
-                    f"⚠️ <b>هشدار کمبود موجودی نمایندگی!</b>\n\n"
-                    f"👛 موجودی فعلی شما به <b>{new_bal:,} تومان</b> رسیده است.\n"
-                    "لطفاً پیش از اتمام موجودی، حساب خود را شارژ کنید تا ساخت اکانت در رباتتان متوقف نشود.",
+                    f"⚠️ <b>هشدار کمبود ترافیک و موجودی نمایندگی!</b>\n\n"
+                    f"👛 موجودی فعلی شما به <b>{new_bal:,} تومان</b> رسیده و رو به پایان است.\n"
+                    "در صورت شارژ بیشترِ زیرنماینده یا کاربران، مابه‌التفاوت از شارژ شما به پنل بالادست منتقل/کسر می‌شود؛ لطفاً حساب خود را شارژ کنید.",
                 )
         except Exception as e:
             log.warning("Low balance alert failed for %s: %s", user_id, e)
+
+    # If a sub-user/sub-reseller topped up inside a tenant bot, auto-transfer any excess from owner's local wallet to upstream or warn owner
+    if delta > 0 and users_path == USERS_PATH:
+        cur_env = load_env()
+        parent_s = cur_env.get("PARENT_DIR")
+        owner_s = cur_env.get("TENANT_OWNER_ID")
+        if parent_s and owner_s and str(user_id) != str(owner_s):
+            owner_uid = int(owner_s)
+            with users_file_lock(USERS_PATH):
+                all_u = load_json(USERS_PATH)
+                sub_liability = sum(int(v.get("balance_toman", 0)) for k, v in all_u.items() if k != str(owner_uid))
+                owner_local_bal = int(all_u.get(str(owner_uid), {}).get("balance_toman", 0))
+            up_bal = get_upstream_balance(cur_env) or 0
+            gap = sub_liability - up_bal
+            if gap > 0:
+                transferred = 0
+                if owner_local_bal > 0:
+                    xfer = min(gap, owner_local_bal)
+                    ok_loc, _ = adjust_wallet_balance_at(USERS_PATH, owner_uid, -xfer, note="انتقال خودکار پوشش به بالادست")
+                    if ok_loc:
+                        adjust_wallet_balance_at(Path(parent_s) / "users.json", owner_uid, xfer, note="انتقال خودکار پوشش از زیرمجموعه")
+                        transferred = xfer
+                        up_bal += xfer
+                        gap -= xfer
+                try:
+                    if transferred > 0 and gap <= 0:
+                        send_message(
+                            cur_env["BOT_TOKEN"],
+                            owner_uid,
+                            f"🔄 <b>انتقال خودکار پوشش به پنل بالادست</b>\n\n"
+                            f"به دلیل شارژ زیرمجموعه، مبلغ <b>{transferred:,} تومان</b> از شارژ شما به موجودی بالادست منتقل شد.\n"
+                            f"💼 موجودی بالادست فعلی: <b>{up_bal:,} تومان</b>",
+                        )
+                    elif gap > 0:
+                        extra = f"\n(مبلغ <b>{transferred:,} تومان</b> از شارژ شما خودکار منتقل شد، اما هنوز <b>{gap:,} تومان</b> کسری دارید.)" if transferred > 0 else ""
+                        send_message(
+                            cur_env["BOT_TOKEN"],
+                            owner_uid,
+                            f"⚠️ <b>هشدار کسری پوشش زیرمجموعه!</b>\n\n"
+                            f"• تعهد کل زیرمجموعه‌ها: <b>{sub_liability:,} تومان</b>\n"
+                            f"• موجودی شما نزد بالادست: <b>{up_bal:,} تومان</b>\n"
+                            f"• کسری پوشش: <b>{gap:,} تومان</b>{extra}\n\n"
+                            "لطفاً هرچه سریع‌تر حساب نمایندگی خود را نزد بالادست شارژ کنید.",
+                        )
+                except Exception as e:
+                    log.warning("Coverage alert failed: %s", e)
     return True, new_bal
 
 
