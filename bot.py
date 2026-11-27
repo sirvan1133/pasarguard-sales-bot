@@ -1211,6 +1211,76 @@ def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = 
     return sent
 
 
+def restore_from_backup_zip(zip_path: Path, data_dir: Path, bot_script: Path) -> tuple[int, int]:
+    """Safely extract backup zip into data_dir and recreate/restart all tenant systemd services."""
+    allowed_ext = (".json", ".env")
+    restored_files = 0
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            rel = Path(info.filename)
+            if rel.is_absolute() or ".." in rel.parts or not info.filename.endswith(allowed_ext):
+                continue
+            dest = (data_dir / rel).resolve()
+            if not str(dest).startswith(str(data_dir.resolve())):
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.parent != data_dir:
+                os.chmod(dest.parent, 0o700)
+            with zf.open(info) as src, open(dest, "wb") as dst:
+                dst.write(src.read())
+            os.chmod(dest, 0o600)
+            restored_files += 1
+
+    tenants_dir = data_dir / "tenants"
+    services_started = 0
+    if tenants_dir.exists():
+        for env_p in tenants_dir.rglob(".env"):
+            t_dir = env_p.parent
+            t_env = load_env_file(env_p)
+            owner_s = t_env.get("TENANT_OWNER_ID")
+            if not owner_s or not owner_s.isdigit():
+                continue
+            # Ensure PARENT_DIR/ROOT_DIR match current server paths
+            rel_parent = t_dir.parent.parent if t_dir.parent.name == "tenants" else data_dir
+            t_env["PARENT_DIR"] = str(rel_parent)
+            t_env["ROOT_DIR"] = str(data_dir)
+            env_p.write_text("\n".join(f"{k}={v}" for k, v in t_env.items()) + "\n", encoding="utf-8")
+            os.chmod(env_p, 0o600)
+
+            svc_name = f"sales-bot-t-{owner_s}.service"
+            svc_path = Path("/etc/systemd/system") / svc_name
+            svc_body = (
+                "[Unit]\n"
+                f"Description=Sales Bot Tenant {owner_s}\n"
+                "After=network-online.target\n\n"
+                "[Service]\n"
+                "Type=simple\n"
+                f"WorkingDirectory={t_dir}\n"
+                f"Environment=BOT_DATA_DIR={t_dir}\n"
+                f"ExecStart={sys.executable} {bot_script}\n"
+                "Restart=always\n"
+                "RestartSec=5\n"
+                "User=root\n\n"
+                "[Install]\n"
+                "WantedBy=multi-user.target\n"
+            )
+            svc_path.write_text(svc_body, encoding="utf-8")
+            services_started += 1
+
+        if services_started > 0:
+            subprocess.run(["systemctl", "daemon-reload"], check=False, timeout=15)
+            for env_p in tenants_dir.rglob(".env"):
+                owner_s = load_env_file(env_p).get("TENANT_OWNER_ID")
+                if owner_s and owner_s.isdigit():
+                    svc_name = f"sales-bot-t-{owner_s}.service"
+                    subprocess.run(["systemctl", "enable", "--now", svc_name], check=False, timeout=15)
+                    subprocess.run(["systemctl", "restart", svc_name], check=False, timeout=15)
+
+    return restored_files, services_started
+
+
 def build_sales_report(start_ts: int, end_ts: int, title: str) -> str:
     orders = load_json(ORDERS_PATH)
     users = load_json(USERS_PATH)
@@ -1366,9 +1436,10 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     ])
     if not tenant:
         kb_rows.extend([
-            [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
-            [{"text": "🗄 روشن/خاموش بکاپ", "callback_data": "adm_toggle_backup"}, {"text": "⏱ بازه بکاپ (ساعت)", "callback_data": "adm_set:backup_interval_hours"}],
-            [{"text": "🤖 توکن ربات بکاپ", "callback_data": "adm_set:backup_bot_token"}, {"text": "🆔 آیدی مقصد بکاپ", "callback_data": "adm_set:backup_chat_id"}],
+            [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "♻️ بازیابی بکاپ (Restore)", "callback_data": "adm_restore"}],
+            [{"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}, {"text": "🗄 روشن/خاموش بکاپ", "callback_data": "adm_toggle_backup"}],
+            [{"text": "⏱ بازه بکاپ (ساعت)", "callback_data": "adm_set:backup_interval_hours"}, {"text": "🤖 توکن ربات بکاپ", "callback_data": "adm_set:backup_bot_token"}],
+            [{"text": "🆔 آیدی مقصد بکاپ", "callback_data": "adm_set:backup_chat_id"}],
         ])
     kb_rows.extend([
         [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
@@ -3373,6 +3444,21 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         send_backup_zip(token, env, targets={user_id}, use_backup_bot=False)
         return
 
+    if data == "adm_restore":
+        if user_id not in get_admin_ids(env) or is_tenant_bot(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_restore_zip"}
+        send_message(
+            token,
+            chat_id,
+            "♻️ <b>بازیابی کامل از بکاپ (Restore)</b>\n\n"
+            "فایل زیپ بکاپ (<code>.zip</code>) را همینجا ارسال کنید تا دیتابیس و تنظیمات ربات اصلی و <b>تمام ربات‌های نماینده</b> به‌صورت خودکار بازیابی و راه‌اندازی شوند.",
+            env=env,
+            user_id=user_id,
+        )
+        return
+
     if data == "adm_toggle_backup":
         if user_id not in get_admin_ids(env) or is_tenant_bot(env):
             return
@@ -4058,8 +4144,10 @@ def main() -> None:
 
     meta = load_json(META_PATH)
     upd_notify = meta.pop("pending_update_notify", None)
-    if upd_notify:
+    rst_notify = meta.pop("pending_restore_notify", None)
+    if upd_notify or rst_notify:
         save_json(META_PATH, meta)
+    if upd_notify:
         try:
             send_message(
                 token,
@@ -4070,6 +4158,19 @@ def main() -> None:
             )
         except Exception as e:
             log.warning("Failed to send post-update notice: %s", e)
+    if rst_notify:
+        try:
+            send_message(
+                token,
+                rst_notify["chat_id"],
+                f"✅ <b>بازیابی کامل بکاپ انجام شد!</b>\n\n"
+                f"• فایل‌های بازیابی‌شده: <b>{rst_notify.get('files', 0)}</b>\n"
+                f"• ربات‌های نمایندهٔ راه‌اندازی‌شده: <b>{rst_notify.get('services', 0)}</b>",
+                env=env,
+                user_id=rst_notify["user_id"],
+            )
+        except Exception as e:
+            log.warning("Failed to send post-restore notice: %s", e)
 
     offset = 0
     log.info("Sales bot starting...")
@@ -4091,6 +4192,34 @@ def main() -> None:
                     st = user_states.get(user_id)
                     if "text" in m:
                         handle_text(token, env, m)
+                    elif "document" in m and st and st.get("step") == "await_restore_zip" and user_id in get_admin_ids(env) and not is_tenant_bot(env):
+                        doc = m["document"]
+                        fname = doc.get("file_name") or ""
+                        if not fname.lower().endswith(".zip"):
+                            send_message(token, m["chat"]["id"], "❌ لطفاً فایل زیپ (<code>.zip</code>) بکاپ را ارسال کنید:", env=env, user_id=user_id)
+                            continue
+                        user_states.pop(user_id, None)
+                        send_message(token, m["chat"]["id"], "⏳ در حال دانلود و بازیابی بکاپ تمام پنل‌ها...", env=env, user_id=user_id)
+                        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_z:
+                            tmp_z_path = Path(tmp_z.name)
+                        try:
+                            f_info = tg_api(token, "getFile", {"file_id": doc["file_id"]}, timeout=15).get("result", {})
+                            f_path = f_info["file_path"]
+                            dl_url = f"https://api.telegram.org/file/bot{token}/{f_path}"
+                            tmp_z_path.write_bytes(urllib.request.urlopen(dl_url, timeout=30).read())
+                            r_files, r_svcs = restore_from_backup_zip(tmp_z_path, DATA_DIR, Path(__file__).resolve())
+                            meta = load_json(META_PATH)
+                            meta["pending_restore_notify"] = {"chat_id": m["chat"]["id"], "user_id": user_id, "files": r_files, "services": r_svcs}
+                            save_json(META_PATH, meta)
+                            try:
+                                tg_api(token, "getUpdates", {"offset": offset, "timeout": 0}, timeout=5)
+                            except Exception:
+                                pass
+                            os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+                        except Exception as e:
+                            send_message(token, m["chat"]["id"], f"❌ خطا در بازیابی بکاپ: {html.escape(str(e))}", env=env, user_id=user_id)
+                        finally:
+                            tmp_z_path.unlink(missing_ok=True)
                     elif ("photo" in m or "document" in m) and st and st.get("step") == "await_receipt":
                         user_states.pop(user_id, None)
                         handle_receipt_submission(token, env, m, st)
