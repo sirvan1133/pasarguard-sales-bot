@@ -301,9 +301,30 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             gb = max(1, min(5000, int(body.get("gb") or 30)))
             months = max(1, min(24, int(body.get("months") or 1)))
             target_un = str(body.get("target_username") or "").strip()
-            method = str(body.get("method") or "card")
-            inv_id = bot.save_invoice({"gb": gb, "months": months, "target_username": target_un, "coupon_code": "", "coupon_pct": 0.0})
-            bot.handle_callback(token, env, {"id": "0", "from": u, "message": {"chat": {"id": uid}, "message_id": 0}, "data": f"pay:{method}:{inv_id}"})
+            coupon = str(body.get("coupon") or "").strip().upper()
+            cpct = 0.0
+            if coupon:
+                cp = bot.load_json(bot.COUPONS_PATH).get(coupon)
+                if cp and cp.get("active", True):
+                    cpct = float(cp.get("percent", 0))
+            inv_id = bot.save_invoice({
+                "gb": gb,
+                "months": months,
+                "target_username": target_un,
+                "coupon_code": coupon,
+                "coupon_pct": cpct,
+            })
+            bot.show_invoice(
+                token,
+                uid,
+                gb,
+                months,
+                env=env,
+                target_username=target_un,
+                coupon_code=coupon,
+                coupon_pct=cpct,
+                inv_id=inv_id,
+            )
             return self._send_json(200, {"ok": True})
 
         if path == "/vpnapp/api/trial":
@@ -326,7 +347,13 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             return self._send_json(200, {"message": f"{amt:,} تومان منتقل شد", "balance": new_bal})
 
         if path == "/vpnapp/api/topup_ping":
-            bot.handle_callback(token, env, {"id": "0", "from": u, "message": {"chat": {"id": uid}, "message_id": 0}, "data": "wallet_topup"})
+            bal = bot.get_wallet_balance(uid)
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}],
+                ]
+            }
+            bot.send_message(token, uid, f"👛 <b>شارژ کیف پول</b>\n💵 موجودی فعلی: <b>{bal:,} تومان</b>\n\nبرای انتخاب مبلغ شارژ روی دکمه زیر بزنید:", reply_markup=kb)
             return self._send_json(200, {"ok": True})
 
         if path == "/vpnapp/api/tickets":
