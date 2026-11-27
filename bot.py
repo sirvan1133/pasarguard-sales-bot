@@ -20,6 +20,11 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -27,15 +32,17 @@ logging.basicConfig(
 log = logging.getLogger("sales-bot")
 
 BASE_DIR = Path(__file__).resolve().parent
-ENV_PATH = BASE_DIR / ".env"
-ORDERS_PATH = BASE_DIR / "orders.json"
-USERS_PATH = BASE_DIR / "users.json"
-SETTINGS_PATH = BASE_DIR / "settings.json"
-COUPONS_PATH = BASE_DIR / "coupons.json"
-INVOICES_PATH = BASE_DIR / "invoices.json"
-REMINDERS_PATH = BASE_DIR / "reminders.json"
-META_PATH = BASE_DIR / "meta.json"
-RESELLERS_PATH = BASE_DIR / "resellers.json"
+DATA_DIR = Path(os.environ.get("BOT_DATA_DIR", str(BASE_DIR))).resolve()
+ENV_PATH = DATA_DIR / ".env"
+ORDERS_PATH = DATA_DIR / "orders.json"
+USERS_PATH = DATA_DIR / "users.json"
+SETTINGS_PATH = DATA_DIR / "settings.json"
+COUPONS_PATH = DATA_DIR / "coupons.json"
+INVOICES_PATH = DATA_DIR / "invoices.json"
+REMINDERS_PATH = DATA_DIR / "reminders.json"
+META_PATH = DATA_DIR / "meta.json"
+RESELLERS_PATH = DATA_DIR / "resellers.json"
+TENANTS_DIR = DATA_DIR / "tenants"
 
 DEFAULT_GB_OPTIONS = [20, 30, 50, 100, 200, 400, 1000]
 DEFAULT_MONTH_OPTIONS = [1, 2, 3, 6, 12]
@@ -73,16 +80,47 @@ BTN_HELP = "❓ راهنما"
 BTN_ADMIN = "👑 پنل ادمین"
 
 
-def load_env() -> dict[str, str]:
+def load_env_file(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
-    if ENV_PATH.exists():
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip()
     return env
+
+
+def load_env() -> dict[str, str]:
+    return load_env_file(ENV_PATH)
+
+
+def is_tenant_bot(env: dict[str, str] | None = None) -> bool:
+    e = env if env is not None else load_env()
+    return bool(e.get("ROOT_DIR") or e.get("PARENT_DIR"))
+
+
+def get_panel_config(env: dict[str, str]) -> dict:
+    """Always read PasarGuard credentials from ROOT_DIR for tenant sub-bots."""
+    root_s = env.get("ROOT_DIR")
+    if root_s:
+        root_dir = Path(root_s)
+        root_env = load_env_file(root_dir / ".env")
+        root_saved = load_json(root_dir / "settings.json")
+        return {
+            "panel_url": str(root_saved.get("panel_url") or root_env.get("PANEL_URL", "")),
+            "panel_user": str(root_saved.get("panel_user") or root_env.get("PANEL_USER", "")),
+            "panel_pass": str(root_saved.get("panel_pass") or root_env.get("PANEL_PASS", "")),
+            "group_id": int(root_saved.get("group_id") or root_env.get("GROUP_ID", "1") or 1),
+        }
+    cfg = get_settings(env)
+    return {
+        "panel_url": str(cfg.get("panel_url", "")),
+        "panel_user": str(cfg.get("panel_user", "")),
+        "panel_pass": str(cfg.get("panel_pass", "")),
+        "group_id": int(cfg.get("group_id", 1) or 1),
+    }
 
 
 def get_admin_ids(env: dict[str, str]) -> set[int]:
@@ -426,14 +464,14 @@ def verify_bsc_usdt_tx(tx_hash: str, expected_to: str, min_usdt: float) -> tuple
 
 def panel_get_token(env: dict[str, str], force_refresh: bool = False) -> str:
     now = time.time()
-    cfg = get_settings(env)
+    pcfg = get_panel_config(env)
     with panel_lock:
         if not force_refresh and panel_token_cache["token"] and now - panel_token_cache["ts"] < 1800:
             return panel_token_cache["token"]
-        base = str(cfg["panel_url"]).rstrip("/")
+        base = pcfg["panel_url"].rstrip("/")
         if not base or "your-panel-domain" in base:
             raise RuntimeError("آدرس پنل هنوز در پنل ادمین تنظیم نشده است")
-        form = urllib.parse.urlencode({"username": str(cfg["panel_user"]), "password": str(cfg["panel_pass"])}).encode("utf-8")
+        form = urllib.parse.urlencode({"username": pcfg["panel_user"], "password": pcfg["panel_pass"]}).encode("utf-8")
         req = urllib.request.Request(
             f"{base}/api/admin/token",
             data=form,
@@ -449,7 +487,7 @@ def panel_get_token(env: dict[str, str], force_refresh: bool = False) -> str:
 
 
 def panel_request(env: dict[str, str], path: str, method: str = "GET", body: dict | None = None) -> dict:
-    base = str(get_settings(env)["panel_url"]).rstrip("/")
+    base = get_panel_config(env)["panel_url"].rstrip("/")
     for attempt in range(2):
         tok = panel_get_token(env, force_refresh=(attempt == 1))
         headers = {"Authorization": f"Bearer {tok}", "User-Agent": "Mozilla/5.0 (compatible; SalesBot/1.0)"}
@@ -478,7 +516,7 @@ def create_panel_user(
     hours: int | None = None,
     custom_prefix: str | None = None,
 ) -> dict:
-    group_id = int(get_settings(env).get("group_id", 1))
+    group_id = get_panel_config(env)["group_id"]
     data_limit = gb * 1024 * 1024 * 1024
     duration_sec = (hours * 3600) if hours is not None else (months * 30 * 86400)
     expire = int(time.time()) + duration_sec
@@ -508,7 +546,7 @@ def resolve_user_for_renew(env: dict[str, str], text: str) -> dict:
     m = re.search(r"/sub/([A-Za-z0-9._\-]+)", t)
     if m:
         sub_tok = m.group(1)
-        base = str(get_settings(env)["panel_url"]).rstrip("/")
+        base = get_panel_config(env)["panel_url"].rstrip("/")
         req = urllib.request.Request(
             f"{base}/sub/{sub_tok}/info",
             headers={"User-Agent": "Mozilla/5.0 (compatible; SalesBot/1.0)"},
@@ -659,18 +697,74 @@ def get_wallet_balance(user_id: int) -> int:
         return int(load_json(USERS_PATH).get(str(user_id), {}).get("balance_toman", 0))
 
 
-def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
+def adjust_wallet_balance_at(users_path: Path, user_id: int, delta: int) -> tuple[bool, int]:
+    """Cross-process file-locked wallet adjustment on any users.json."""
     uid = str(user_id)
+    lock_path = users_path.with_suffix(".lock")
+    users_path.parent.mkdir(parents=True, exist_ok=True)
     with users_lock:
-        users = load_json(USERS_PATH)
-        u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
-        cur = int(u.get("balance_toman", 0))
-        new_bal = cur + delta
-        if new_bal < 0:
-            return False, cur
-        u["balance_toman"] = new_bal
-        save_json(USERS_PATH, users)
-        return True, new_bal
+        lock_fp = open(lock_path, "a+")
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+            users = load_json(users_path)
+            u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
+            cur = int(u.get("balance_toman", 0))
+            new_bal = cur + delta
+            if new_bal < 0:
+                return False, cur
+            u["balance_toman"] = new_bal
+            save_json(users_path, users)
+            return True, new_bal
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+            lock_fp.close()
+
+
+def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
+    return adjust_wallet_balance_at(USERS_PATH, user_id, delta)
+
+
+def get_upstream_balance(env: dict[str, str]) -> int | None:
+    parent_s = env.get("PARENT_DIR")
+    owner_s = env.get("TENANT_OWNER_ID")
+    if not parent_s or not owner_s:
+        return None
+    users = load_json(Path(parent_s) / "users.json")
+    return int(users.get(str(owner_s), {}).get("balance_toman", 0))
+
+
+def charge_upstream_chain(data_dir: Path, gb: int) -> tuple[bool, str]:
+    """Recursively deduct wholesale GB cost up the parent tenant chain."""
+    cur_env = load_env_file(data_dir / ".env")
+    parent_s = cur_env.get("PARENT_DIR")
+    owner_s = cur_env.get("TENANT_OWNER_ID")
+    if not parent_s or not owner_s:
+        return True, ""
+    parent_dir = Path(parent_s)
+    ppg = int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
+    cost = int(gb) * ppg
+    ok_up, err_up = charge_upstream_chain(parent_dir, gb)
+    if not ok_up:
+        return False, err_up
+    ok_cur, cur_bal = adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), -cost)
+    if not ok_cur:
+        refund_upstream_chain(parent_dir, gb)
+        return False, f"❌ موجودی کیف پول نمایندگی نزد بالادست کافی نیست (نیاز: {cost:,} ت | موجودی: {cur_bal:,} ت). لطفاً حساب نمایندگی خود را شارژ کنید."
+    return True, ""
+
+
+def refund_upstream_chain(data_dir: Path, gb: int) -> None:
+    cur_env = load_env_file(data_dir / ".env")
+    parent_s = cur_env.get("PARENT_DIR")
+    owner_s = cur_env.get("TENANT_OWNER_ID")
+    if not parent_s or not owner_s:
+        return
+    parent_dir = Path(parent_s)
+    ppg = int(cur_env.get("WHOLESALE_PPG", "5000") or 5000)
+    adjust_wallet_balance_at(parent_dir / "users.json", int(owner_s), int(gb) * ppg)
+    refund_upstream_chain(parent_dir, gb)
 
 
 def is_user_blocked(user_id: int) -> tuple[bool, int]:
@@ -779,12 +873,70 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         "inline_keyboard": [
             [{"text": "➕ ساخت اکانت جدید", "callback_data": "res_create"}, {"text": "📦 ساخت گروهی (Bulk)", "callback_data": "res_bulk"}],
             [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup"}],
+            [{"text": "🤖 ربات اختصاصی من (White-Label)", "callback_data": "res_subbot"}],
         ]
     }
     if message_id is not None:
         edit_message(token, chat_id, message_id, txt, reply_markup=kb)
     else:
         send_message(token, chat_id, txt, reply_markup=kb)
+
+
+def provision_tenant_bot(env: dict[str, str], owner_uid: int, bot_token: str) -> tuple[str, str]:
+    tok = bot_token.strip()
+    if tok == env.get("BOT_TOKEN"):
+        raise RuntimeError("نمی‌توانید توکن همین ربات مادر را وارد کنید!")
+    me = tg_api(tok, "getMe", timeout=10).get("result", {})
+    sub_uname = me.get("username")
+    if not sub_uname:
+        raise RuntimeError("توکن نامعتبر است")
+
+    t_dir = TENANTS_DIR / str(owner_uid)
+    t_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(t_dir, 0o700)
+    root_dir = env.get("ROOT_DIR") or str(DATA_DIR)
+    ppg = get_reseller_price_per_gb(owner_uid, env)
+    env_content = (
+        f"BOT_TOKEN={tok}\n"
+        f"ADMIN_IDS={owner_uid}\n"
+        f"TENANT_OWNER_ID={owner_uid}\n"
+        f"PARENT_DIR={DATA_DIR}\n"
+        f"ROOT_DIR={root_dir}\n"
+        f"WHOLESALE_PPG={ppg}\n"
+    )
+    t_env = t_dir / ".env"
+    t_env.write_text(env_content, encoding="utf-8")
+    os.chmod(t_env, 0o600)
+
+    svc_name = f"sales-bot-t-{owner_uid}.service"
+    svc_path = Path("/etc/systemd/system") / svc_name
+    svc_body = (
+        "[Unit]\n"
+        f"Description=Sales Bot Tenant {owner_uid} (@{sub_uname})\n"
+        "After=network-online.target\n\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"WorkingDirectory={t_dir}\n"
+        f"Environment=BOT_DATA_DIR={t_dir}\n"
+        f"ExecStart={sys.executable} {Path(__file__).resolve()}\n"
+        "Restart=always\n"
+        "RestartSec=5\n"
+        "User=root\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    svc_path.write_text(svc_body, encoding="utf-8")
+    subprocess.run(["systemctl", "daemon-reload"], check=True, timeout=15)
+    subprocess.run(["systemctl", "enable", "--now", svc_name], check=True, timeout=20)
+    subprocess.run(["systemctl", "restart", svc_name], check=True, timeout=20)
+
+    with resellers_lock:
+        data = load_json(RESELLERS_PATH)
+        if str(owner_uid) in data:
+            data[str(owner_uid)]["sub_bot_username"] = sub_uname
+            data[str(owner_uid)]["sub_bot_service"] = svc_name
+            save_json(RESELLERS_PATH, data)
+    return sub_uname, svc_name
 
 
 def send_connection_guide(token: str, chat_id: int, env: dict[str, str], user_id: int) -> None:
@@ -942,11 +1094,17 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     bot_subs = len({o.get("panel_username") for o in approved if o.get("panel_username")})
     total_tmn = sum(int(o.get("total_toman", 0)) for o in approved)
     cfg = get_settings(env)
-    try:
-        sys_info = panel_request(env, "/api/system")
-        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 🟢 فعال پنل: <b>{int(sys_info.get('active_users', 0)):,}</b> | 🌐 آنلاین: <b>{int(sys_info.get('online_users', 0)):,}</b>"
-    except Exception:
-        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b>"
+    tenant = is_tenant_bot(env)
+    if tenant:
+        up_bal = get_upstream_balance(env)
+        up_s = f"{up_bal:,} تومان" if up_bal is not None else "-"
+        panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 💼 موجودی نمایندگی: <b>{up_s}</b>"
+    else:
+        try:
+            sys_info = panel_request(env, "/api/system")
+            panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b> | 🟢 فعال پنل: <b>{int(sys_info.get('active_users', 0)):,}</b> | 🌐 آنلاین: <b>{int(sys_info.get('online_users', 0)):,}</b>"
+        except Exception:
+            panel_stats_s = f"📦 ساب‌های ربات: <b>{bot_subs:,}</b>"
     try:
         rate = get_usdt_toman_rate()
         rate_s = f"{rate:,} تومان"
@@ -957,6 +1115,10 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     cm_map = {"all": "فوری برای همه + بررسی بعدی", "trusted": "فوری فقط مشتریان قدیمی", "off": "تایید دستی"}
     cm_s = cm_map.get(str(cfg.get("card_instant_mode", "all")), "فوری برای همه + بررسی بعدی")
     maint_s = "🔴 فعال (فروش متوقف)" if cfg.get("maintenance_mode") else "🟢 غیرفعال"
+    panel_info_line = "" if tenant else (
+        f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه پنل: <code>{cfg['group_id']}</code>)\n"
+        "💡 <i>آیدی گروه پنل مشخص می‌کند کاربران جدید عضو کدام گروه PasarGuard شوند (در پنل‌های تک‌گروهه همان 1 است).</i>\n"
+    )
     txt = (
         "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
         f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
@@ -976,34 +1138,37 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
-        f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه پنل: <code>{cfg['group_id']}</code>)\n"
-        "💡 <i>آیدی گروه پنل مشخص می‌کند کاربران جدید عضو کدام گروه PasarGuard شوند (در پنل‌های تک‌گروهه همان 1 است).</i>\n\n"
+        f"{panel_info_line}\n"
         "برای تغییر هر مورد روی دکمهٔ مربوطه بزنید:"
     )
-    kb = {
-        "inline_keyboard": [
-            [{"text": "💵 قیمت هر گیگ", "callback_data": "adm_set:base_price_per_gb"}, {"text": "🎯 آستانه عمده", "callback_data": "adm_set:bulk_threshold_gb"}],
-            [{"text": "📉 سود زیر آستانه (٪)", "callback_data": "adm_set:pct_under_threshold"}, {"text": "📈 سود بالای آستانه (٪)", "callback_data": "adm_set:pct_over_threshold"}],
-            [{"text": "🎁 تخفیف تمدید (٪)", "callback_data": "adm_set:renew_discount_pct"}, {"text": "🏷 تخفیف همگانی (٪)", "callback_data": "adm_set:global_discount_pct"}],
-            [{"text": "🤝 پاداش رفرال (٪)", "callback_data": "adm_set:referral_reward_pct"}, {"text": "🛡 سقف سفارش در انتظار", "callback_data": "adm_set:max_pending_orders"}],
-            [{"text": "🎁 روشن/خاموش تست", "callback_data": "adm_toggle_trial"}, {"text": "📦 حجم تست (GB)", "callback_data": "adm_set:trial_gb"}],
-            [{"text": "⏱ مدت تست (ساعت)", "callback_data": "adm_set:trial_hours"}, {"text": "📆 فاصله تست (روز)", "callback_data": "adm_set:trial_cooldown_days"}],
-            [{"text": "⏳ روز یادآور انقضا", "callback_data": "adm_set:reminder_days"}, {"text": "📉 درصد حجم یادآور", "callback_data": "adm_set:reminder_pct"}],
-            [{"text": "📢 روشن/خاموش قفل کانال", "callback_data": "adm_toggle_force_join"}, {"text": "📢 آیدی کانال قفل", "callback_data": "adm_set:force_join_channel"}],
-            [{"text": "💳 تغییر شماره کارت", "callback_data": "adm_set:card_number"}, {"text": "👤 تغییر صاحب کارت", "callback_data": "adm_set:card_owner"}],
-            [{"text": "🪙 آدرس تتر BEP20", "callback_data": "adm_set:usdt_bep20"}, {"text": "🎟 مدیریت کد تخفیف", "callback_data": "adm_coupons"}],
+    kb_rows = [
+        [{"text": "💵 قیمت هر گیگ", "callback_data": "adm_set:base_price_per_gb"}, {"text": "🎯 آستانه عمده", "callback_data": "adm_set:bulk_threshold_gb"}],
+        [{"text": "📉 سود زیر آستانه (٪)", "callback_data": "adm_set:pct_under_threshold"}, {"text": "📈 سود بالای آستانه (٪)", "callback_data": "adm_set:pct_over_threshold"}],
+        [{"text": "🎁 تخفیف تمدید (٪)", "callback_data": "adm_set:renew_discount_pct"}, {"text": "🏷 تخفیف همگانی (٪)", "callback_data": "adm_set:global_discount_pct"}],
+        [{"text": "🤝 پاداش رفرال (٪)", "callback_data": "adm_set:referral_reward_pct"}, {"text": "🛡 سقف سفارش در انتظار", "callback_data": "adm_set:max_pending_orders"}],
+        [{"text": "🎁 روشن/خاموش تست", "callback_data": "adm_toggle_trial"}, {"text": "📦 حجم تست (GB)", "callback_data": "adm_set:trial_gb"}],
+        [{"text": "⏱ مدت تست (ساعت)", "callback_data": "adm_set:trial_hours"}, {"text": "📆 فاصله تست (روز)", "callback_data": "adm_set:trial_cooldown_days"}],
+        [{"text": "⏳ روز یادآور انقضا", "callback_data": "adm_set:reminder_days"}, {"text": "📉 درصد حجم یادآور", "callback_data": "adm_set:reminder_pct"}],
+        [{"text": "📢 روشن/خاموش قفل کانال", "callback_data": "adm_toggle_force_join"}, {"text": "📢 آیدی کانال قفل", "callback_data": "adm_set:force_join_channel"}],
+        [{"text": "💳 تغییر شماره کارت", "callback_data": "adm_set:card_number"}, {"text": "👤 تغییر صاحب کارت", "callback_data": "adm_set:card_owner"}],
+        [{"text": "🪙 آدرس تتر BEP20", "callback_data": "adm_set:usdt_bep20"}, {"text": "🎟 مدیریت کد تخفیف", "callback_data": "adm_coupons"}],
+    ]
+    if not tenant:
+        kb_rows.extend([
             [{"text": "🌐 آدرس پنل", "callback_data": "adm_set:panel_url"}, {"text": "👤 یوزر پنل", "callback_data": "adm_set:panel_user"}],
             [{"text": "🔑 رمز پنل", "callback_data": "adm_set:panel_pass"}, {"text": "👥 آیدی گروه پنل", "callback_data": "adm_set:group_id"}],
-            [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
-            [{"text": "💼 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
-            [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
-            [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
-            [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
-            [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
-            [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
-            [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
-        ]
-    }
+        ])
+    kb_rows.extend([
+        [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
+        [{"text": "💼 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
+        [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
+        [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
+        [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}] if tenant else [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
+        [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
+        [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
+        [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
+    ])
+    kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
         edit_message(token, chat_id, message_id, txt, reply_markup=kb)
     else:
@@ -1141,32 +1306,40 @@ def fulfill_approved_order(token: str, env: dict[str, str], order_id: str, order
         )
         return f"wallet+{amt}"
 
-    panel_base = str(get_settings(env)["panel_url"]).rstrip("/")
-    if order.get("type") == "renew" and order.get("target_username"):
-        u = renew_panel_user(env, order["target_username"], order["gb"], order["months"])
-        sub_path = u["subscription_url"]
-        full_sub = f"{panel_base}{sub_path}"
-        uname = u["username"]
-        new_gb = round((u.get("data_limit") or 0) / (1024**3), 2)
-        caption = (
-            f"✅ <b>اشتراک شما تمدید شد!</b>\n\n"
-            f"🆔 نام کاربری: <code>{html.escape(uname)}</code>\n"
-            f"📦 حجم جدید کل: <b>{new_gb} گیگابایت</b>\n"
-            f"⏳ مدت اضافه شده: <b>+{order['months']} ماه</b>\n\n"
-            f"🔗 <b>لینک سابسکریپشن:</b>\n<code>{html.escape(full_sub)}</code>"
-        )
-    else:
-        u = create_panel_user(env, order_id, order["user_id"], order["gb"], order["months"], order["pay_method"])
-        sub_path = u["subscription_url"]
-        full_sub = f"{panel_base}{sub_path}"
-        uname = u["username"]
-        caption = (
-            f"🎉 <b>اشتراک شما آماده است!</b>\n\n"
-            f"🆔 نام کاربری: <code>{html.escape(uname)}</code>\n"
-            f"📦 حجم: <b>{order['gb']} گیگابایت</b>\n"
-            f"⏳ مدت: <b>{order['months']} ماه</b>\n\n"
-            f"🔗 <b>لینک سابسکریپشن (برای کپی لمس کنید):</b>\n<code>{html.escape(full_sub)}</code>"
-        )
+    panel_base = get_panel_config(env)["panel_url"].rstrip("/")
+    order_gb = int(order.get("gb") or 0)
+    ok_up, err_up = charge_upstream_chain(DATA_DIR, order_gb)
+    if not ok_up:
+        raise RuntimeError(err_up)
+    try:
+        if order.get("type") == "renew" and order.get("target_username"):
+            u = renew_panel_user(env, order["target_username"], order["gb"], order["months"])
+            sub_path = u["subscription_url"]
+            full_sub = f"{panel_base}{sub_path}"
+            uname = u["username"]
+            new_gb = round((u.get("data_limit") or 0) / (1024**3), 2)
+            caption = (
+                f"✅ <b>اشتراک شما تمدید شد!</b>\n\n"
+                f"🆔 نام کاربری: <code>{html.escape(uname)}</code>\n"
+                f"📦 حجم جدید کل: <b>{new_gb} گیگابایت</b>\n"
+                f"⏳ مدت اضافه شده: <b>+{order['months']} ماه</b>\n\n"
+                f"🔗 <b>لینک سابسکریپشن:</b>\n<code>{html.escape(full_sub)}</code>"
+            )
+        else:
+            u = create_panel_user(env, order_id, order["user_id"], order["gb"], order["months"], order["pay_method"])
+            sub_path = u["subscription_url"]
+            full_sub = f"{panel_base}{sub_path}"
+            uname = u["username"]
+            caption = (
+                f"🎉 <b>اشتراک شما آماده است!</b>\n\n"
+                f"🆔 نام کاربری: <code>{html.escape(uname)}</code>\n"
+                f"📦 حجم: <b>{order['gb']} گیگابایت</b>\n"
+                f"⏳ مدت: <b>{order['months']} ماه</b>\n\n"
+                f"🔗 <b>لینک سابسکریپشن (برای کپی لمس کنید):</b>\n<code>{html.escape(full_sub)}</code>"
+            )
+    except Exception:
+        refund_upstream_chain(DATA_DIR, order_gb)
+        raise
 
     with orders_lock:
         orders = load_json(ORDERS_PATH)
@@ -1517,6 +1690,17 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             save_json(USERS_PATH, users)
         trial_gb = int(cfg.get("trial_gb", 1))
         trial_hours = int(cfg.get("trial_hours", 24))
+        ok_up, err_up = charge_upstream_chain(DATA_DIR, trial_gb)
+        if not ok_up:
+            with users_lock:
+                users = load_json(USERS_PATH)
+                if str(user_id) in users:
+                    users[str(user_id)]["last_trial_at"] = prev_trial_at
+                    if prev_trial_at == 0:
+                        users[str(user_id)]["trial_used"] = False
+                    save_json(USERS_PATH, users)
+            send_message(token, chat_id, err_up, env=env, user_id=user_id)
+            return
         try:
             u = create_panel_user(
                 env,
@@ -1528,7 +1712,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 hours=trial_hours,
                 custom_prefix=f"trial_{user_id}",
             )
-            full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
+            full_sub = f"{get_panel_config(env)['panel_url'].rstrip('/')}{u['subscription_url']}"
             uname = u["username"]
             caption = (
                 f"🎁 <b>اشتراک تست رایگان شما آماده است!</b>\n\n"
@@ -1539,6 +1723,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             )
             send_qr_with_sub(token, chat_id, full_sub, caption, env, user_id)
         except Exception as e:
+            refund_upstream_chain(DATA_DIR, trial_gb)
             with users_lock:
                 users = load_json(USERS_PATH)
                 if str(user_id) in users:
@@ -1933,6 +2118,30 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             send_message(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows}, env=env, user_id=user_id)
             return
 
+        if step == "await_res_subbot_token":
+            if not get_reseller(user_id):
+                user_states.pop(user_id, None)
+                return
+            if ":" not in t or len(t.strip()) < 25:
+                send_message(token, chat_id, "❌ فرمت توکن صحیح نیست. توکن را از @BotFather بگیرید و دوباره بفرستید:", env=env, user_id=user_id)
+                return
+            try:
+                sub_uname, _ = provision_tenant_bot(env, user_id, t.strip())
+                user_states.pop(user_id, None)
+                send_message(
+                    token,
+                    chat_id,
+                    f"🎉 <b>ربات اختصاصی شما (@{html.escape(sub_uname)}) راه‌اندازی شد!</b>\n\n"
+                    f"• همین الان وارد @{html.escape(sub_uname)} شوید و <code>/start</code> بزنید.\n"
+                    "• تمام امکانات <b>👑 پنل ادمین</b> (تغییر قیمت‌ها، شماره کارت، ولت، تست رایگان، کد تخفیف و حتی دادن نمایندگی) برای شما فعال است.\n"
+                    "• هزینهٔ عمده هر ساخت/تمدید به‌صورت خودکار از موجودی کیف پول نمایندگی شما کسر می‌شود.",
+                    env=env,
+                    user_id=user_id,
+                )
+            except Exception as e:
+                send_message(token, chat_id, f"❌ خطا در راه‌اندازی ربات: {html.escape(str(e))}\nتوکن صحیح را دوباره بفرستید:", env=env, user_id=user_id)
+            return
+
         if step == "await_res_bulk":
             if not get_reseller(user_id):
                 user_states.pop(user_id, None)
@@ -2177,6 +2386,69 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         show_invoice(token, chat_id, gb, int(m_s), message_id=msg_id, env=env, target_username=target_username)
         return
 
+    if data == "res_panel":
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        show_reseller_panel(token, chat_id, env, user_id, message_id=msg_id)
+        return
+
+    if data == "res_subbot":
+        rec = get_reseller(user_id)
+        if not rec:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "دسترسی نمایندگی ندارید", "show_alert": True})
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        svc = rec.get("sub_bot_service")
+        sub_u = rec.get("sub_bot_username")
+        if svc and sub_u:
+            st_out = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True).stdout.strip()
+            st_lbl = "🟢 فعال" if st_out == "active" else f"🔴 متوقف ({st_out})"
+            txt = (
+                f"🤖 <b>ربات اختصاصی شما: @{html.escape(sub_u)}</b>\n\n"
+                f"• وضعیت سرویس: <b>{st_lbl}</b>\n"
+                "• می‌توانید قیمت‌ها، شماره کارت، ولت، تست رایگان و حتی زیرنماینده‌های خودتان را داخل همان ربات مدیریت کنید."
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "🔄 ری‌استارت ربات من", "callback_data": "res_subbot_restart"}, {"text": "⏹ توقف ربات", "callback_data": "res_subbot_stop"}],
+                    [{"text": "🔑 تغییر توکن ربات", "callback_data": "res_subbot_set"}, {"text": "🔙 بازگشت", "callback_data": "res_panel"}],
+                ]
+            }
+        else:
+            txt = (
+                "🤖 <b>راه‌اندازی ربات اختصاصی (White-Label)</b>\n\n"
+                "با ثبت توکن ربات تلگرام خودتان (از @BotFather):\n"
+                "• ربات اختصاصی شما با برند و کارت بانکی/تتر خودتان راه‌اندازی می‌شود.\n"
+                "• تمام امکانات <b>👑 پنل ادمین</b> (به جز مشخصات پنل اصلی) در اختیار شماست و حتی می‌توانید زیرنماینده بگیرید.\n"
+                "• هنگام هر فروش، هزینهٔ عمدهٔ حجم به‌صورت خودکار از کیف پول نمایندگی شما کسر می‌شود."
+            )
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "➕ ثبت توکن ربات و راه‌اندازی", "callback_data": "res_subbot_set"}],
+                    [{"text": "🔙 بازگشت", "callback_data": "res_panel"}],
+                ]
+            }
+        edit_message(token, chat_id, msg_id, txt, reply_markup=kb)
+        return
+
+    if data == "res_subbot_set":
+        if not get_reseller(user_id):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_res_subbot_token"}
+        send_message(token, chat_id, "🤖 توکن ربات جدید را از @BotFather گرفته و همینجا بفرستید:", env=env, user_id=user_id)
+        return
+
+    if data in ("res_subbot_restart", "res_subbot_stop"):
+        rec = get_reseller(user_id)
+        if not rec or not rec.get("sub_bot_service"):
+            return
+        svc = rec["sub_bot_service"]
+        cmd = "restart" if data == "res_subbot_restart" else "stop"
+        subprocess.run(["systemctl", cmd, svc], check=False, timeout=15)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ انجام شد"})
+        edit_message(token, chat_id, msg_id, f"✅ دستور <code>{cmd}</code> روی ربات شما اعمال شد.", reply_markup={"inline_keyboard": [[{"text": "🔙 بازگشت", "callback_data": "res_subbot"}]]})
+        return
+
     if data == "reseller_topup":
         cfg = get_settings(env)
         min_gb = int(cfg.get("reseller_min_gb", 500))
@@ -2291,9 +2563,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"موجودی کافی نیست (نیاز: {cost:,} ت)", "show_alert": True})
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال تمدید..."})
+        ok_up, err_up = charge_upstream_chain(DATA_DIR, gb)
+        if not ok_up:
+            adjust_wallet_balance(user_id, cost)
+            send_message(token, chat_id, err_up, env=env, user_id=user_id)
+            return
         try:
             u = renew_panel_user(env, renew_u, gb, months)
-            full_sub = f"{str(get_settings(env)['panel_url']).rstrip('/')}{u['subscription_url']}"
+            full_sub = f"{get_panel_config(env)['panel_url'].rstrip('/')}{u['subscription_url']}"
             order_id = secrets.token_hex(4).upper()
             with orders_lock:
                 orders = load_json(ORDERS_PATH)
@@ -2308,6 +2585,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             record_reseller_sale(user_id, gb, count=0)
             send_qr_with_sub(token, chat_id, full_sub, f"✅ <b>تمدید نماینده انجام شد!</b>\n🆔 <code>{html.escape(renew_u)}</code> (+{gb}GB / +{months} ماه)\n👛 موجودی: <b>{new_bal:,} ت</b>\n<code>{html.escape(full_sub)}</code>", env, user_id)
         except Exception as e:
+            refund_upstream_chain(DATA_DIR, gb)
             adjust_wallet_balance(user_id, cost)
             send_message(token, chat_id, f"❌ خطا در تمدید (مبلغ برگشت خورد): {html.escape(str(e))}", env=env, user_id=user_id)
         return
@@ -2326,13 +2604,19 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if not ok_bal:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
             return
+        ok_up, err_up = charge_upstream_chain(DATA_DIR, gb)
+        if not ok_up:
+            adjust_wallet_balance(user_id, cost)
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی بالادست کافی نیست", "show_alert": True})
+            send_message(token, chat_id, err_up, env=env, user_id=user_id)
+            return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال ساخت..."})
         order_id = secrets.token_hex(4).upper()
         prefix_u = custom_u if custom_u else f"r_{str(user_id)[-4:]}_{order_id.lower()}"
         try:
             u = create_panel_user(env, order_id, user_id, gb, months, "reseller_wallet", custom_prefix=prefix_u)
             uname = u["username"]
-            full_sub = f"{str(get_settings(env)['panel_url']).rstrip('/')}{u['subscription_url']}"
+            full_sub = f"{get_panel_config(env)['panel_url'].rstrip('/')}{u['subscription_url']}"
             with orders_lock:
                 orders = load_json(ORDERS_PATH)
                 orders[order_id] = {
@@ -2347,6 +2631,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(uname)}</code> ساخته شد (موجودی: <b>{new_bal:,} ت</b>).")
             send_qr_with_sub(token, chat_id, full_sub, f"🎉 <b>اکانت نماینده آماده است!</b>\n🆔 <code>{html.escape(uname)}</code>\n📦 {gb}GB / {months} ماه\n\n<code>{html.escape(full_sub)}</code>", env, user_id)
         except Exception as e:
+            refund_upstream_chain(DATA_DIR, gb)
             adjust_wallet_balance(user_id, cost)
             send_message(token, chat_id, f"❌ خطا در ساخت (مبلغ برگشت خورد): {html.escape(str(e))}", env=env, user_id=user_id)
         return
@@ -2375,9 +2660,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if not ok_bal:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
             return
+        ok_up, err_up = charge_upstream_chain(DATA_DIR, cnt * gb)
+        if not ok_up:
+            adjust_wallet_balance(user_id, cost)
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی بالادست کافی نیست", "show_alert": True})
+            send_message(token, chat_id, err_up, env=env, user_id=user_id)
+            return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال ساخت گروهی..."})
         edit_message(token, chat_id, msg_id, f"⏳ در حال ساخت {cnt} اکانت...")
-        panel_base = str(get_settings(env)["panel_url"]).rstrip("/")
+        panel_base = get_panel_config(env)["panel_url"].rstrip("/")
         created_lines = []
         created_ok = 0
         for _ in range(cnt):
@@ -2402,6 +2693,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             except Exception as e:
                 created_lines.append(f"• ❌ خطا: {html.escape(str(e))}")
         if created_ok < cnt:
+            refund_upstream_chain(DATA_DIR, (cnt - created_ok) * gb)
             refund = (cnt - created_ok) * gb * get_reseller_price_per_gb(user_id, env)
             _, new_bal = adjust_wallet_balance(user_id, refund)
         if created_ok > 0:
@@ -2510,6 +2802,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                     orders[oid]["status"] = "refunded"
             save_json(ORDERS_PATH, orders)
         _, new_bal = adjust_wallet_balance(user_id, refund_amt)
+        refund_upstream_chain(DATA_DIR, refund_gb)
         record_reseller_sale(user_id, -refund_gb, count=-1)
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ حذف و برگشت وجه انجام شد"})
         edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(un)}</code> حذف شد و مبلغ <b>{refund_amt:,} تومان</b> به کیف پول شما برگشت.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>")
@@ -2593,7 +2886,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         try:
             if action == "sub_revoke":
                 u = panel_request(env, f"/api/user/{urllib.parse.quote(uname)}/revoke_sub", method="POST")
-                full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
+                full_sub = f"{get_panel_config(env)['panel_url'].rstrip('/')}{u['subscription_url']}"
                 with orders_lock:
                     orders = load_json(ORDERS_PATH)
                     for o in orders.values():
@@ -2627,7 +2920,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                     user_id=user_id,
                 )
             else:
-                full_sub = f"{str(cfg['panel_url']).rstrip('/')}{u['subscription_url']}"
+                full_sub = f"{get_panel_config(env)['panel_url'].rstrip('/')}{u['subscription_url']}"
                 send_qr_with_sub(
                     token,
                     chat_id,
@@ -2851,6 +3144,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             except Exception:
                 pass
         else:
+            with resellers_lock:
+                svc = load_json(RESELLERS_PATH).get(str(t_uid), {}).get("sub_bot_service")
+            if svc:
+                subprocess.run(["systemctl", "disable", "--now", svc], check=False, timeout=15)
             set_reseller(t_uid, active=False)
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🚫 نمایندگی لغو شد"})
             show_admin_panel(token, chat_id, env, message_id=msg_id)
@@ -3000,7 +3297,13 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         try:
             pu = panel_request(env, f"/api/user/{urllib.parse.quote(uname)}")
             if act == "adm_u_addgb":
-                add_b = int(parts[2]) * 1024 * 1024 * 1024
+                add_gb = int(parts[2])
+                ok_up, err_up = charge_upstream_chain(DATA_DIR, add_gb)
+                if not ok_up:
+                    tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی بالادست کافی نیست", "show_alert": True})
+                    send_message(token, chat_id, err_up, env=env, user_id=user_id)
+                    return
+                add_b = add_gb * 1024 * 1024 * 1024
                 new_lim = int(pu.get("data_limit") or 0) + add_b
                 panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"data_limit": new_lim})
                 msg_ok = f"✅ +{parts[2]} گیگ به <code>{html.escape(uname)}</code> اضافه شد."
@@ -3023,7 +3326,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         return
 
     if data == "adm_update_bot":
-        if user_id not in get_admin_ids(env):
+        if user_id not in get_admin_ids(env) or is_tenant_bot(env):
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال دانلود آپدیت..."})
         try:
@@ -3154,6 +3457,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
             return
         key = data.split(":", 1)[1]
+        if is_tenant_bot(env) and key in ("panel_url", "panel_user", "panel_pass", "group_id"):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "این بخش در ربات نماینده قفل است", "show_alert": True})
+            return
         labels = {
             "base_price_per_gb": "قیمت پایه هر گیگ (به تومان، مثلاً 15000)",
             "bulk_threshold_gb": "آستانه حجم عمده (به گیگ، مثلاً 100)",
