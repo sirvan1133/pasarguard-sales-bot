@@ -148,15 +148,15 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
     if get_user_menu_mode(user_id) == "inline":
         return {"remove_keyboard": True}
     rows = [
-        [{"text": BTN_BUY}],
-        [{"text": BTN_RENEW}, {"text": BTN_MY_SUBS}],
-        [{"text": BTN_WALLET}, {"text": BTN_HELP}],
+        [{"text": BTN_BUY, "style": "success"}],
+        [{"text": BTN_RENEW, "style": "primary"}, {"text": BTN_MY_SUBS, "style": "primary"}],
+        [{"text": BTN_WALLET, "style": "success"}, {"text": BTN_HELP}],
         [{"text": BTN_REFERRAL}, {"text": BTN_SUPPORT}],
-        [{"text": BTN_TRIAL}, {"text": BTN_RESELLER}],
-        [{"text": BTN_CHECK}, {"text": BTN_MENU_MODE}],
+        [{"text": BTN_TRIAL, "style": "success"}, {"text": BTN_RESELLER, "style": "danger"}],
+        [{"text": BTN_CHECK, "style": "primary"}, {"text": BTN_MENU_MODE}],
     ]
     if user_id in get_admin_ids(env):
-        rows.append([{"text": BTN_ADMIN}])
+        rows.append([{"text": BTN_ADMIN, "style": "primary"}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
 
@@ -166,11 +166,11 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
     rows = [
         [{"text": "🛒 خرید سرویس جدید", "callback_data": "home:buy", "style": "success"}],
         [
-            {"text": "♻️ تمدید سرویس", "callback_data": "home:renew"},
-            {"text": "📲 سرویس های من", "callback_data": "home:subs"},
+            {"text": "♻️ تمدید سرویس", "callback_data": "home:renew", "style": "primary"},
+            {"text": "📲 سرویس های من", "callback_data": "home:subs", "style": "primary"},
         ],
         [
-            {"text": "💰 اعتبار من", "callback_data": "home:wallet"},
+            {"text": "💰 اعتبار من", "callback_data": "home:wallet", "style": "success"},
             {"text": "💡 آموزش استفاده", "callback_data": "conn_guide"},
         ],
         [
@@ -178,8 +178,8 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
             {"text": "👨‍💻 تماس با پشتیبانی", "callback_data": "home:support"},
         ],
         [
-            {"text": "🎁 تست رایگان", "callback_data": "home:trial"},
-            {"text": "📊 استعلام اشتراک", "callback_data": "home:check"},
+            {"text": "🎁 تست رایگان", "callback_data": "home:trial", "style": "success"},
+            {"text": "📊 استعلام اشتراک", "callback_data": "home:check", "style": "primary"},
         ],
         [{"text": res_lbl, "callback_data": "res_panel", "style": "danger"}],
     ]
@@ -714,15 +714,16 @@ def tg_send_photo(token: str, chat_id: int, photo_path: Path, caption: str = "",
 
 
 def _strip_button_styles(markup: dict) -> dict:
-    if not isinstance(markup, dict) or "inline_keyboard" not in markup:
+    if not isinstance(markup, dict):
         return markup
-    return {
-        **markup,
-        "inline_keyboard": [
-            [{k: v for k, v in btn.items() if k != "style"} for btn in row]
-            for row in markup["inline_keyboard"]
-        ],
-    }
+    out = dict(markup)
+    for key in ("inline_keyboard", "keyboard"):
+        if key in out and isinstance(out[key], list):
+            out[key] = [
+                [{k: v for k, v in btn.items() if k not in ("style", "icon_custom_emoji_id")} for btn in row]
+                for row in out[key]
+            ]
+    return out
 
 
 def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None = None, env: dict[str, str] | None = None, user_id: int | None = None) -> dict | None:
@@ -740,7 +741,7 @@ def send_message(token: str, chat_id: int, text: str, reply_markup: dict | None 
     try:
         return tg_api(token, "sendMessage", payload, timeout=15).get("result")
     except urllib.error.HTTPError as e:
-        if e.code == 400 and markup and "inline_keyboard" in markup:
+        if e.code == 400 and markup and ("inline_keyboard" in markup or "keyboard" in markup):
             payload["reply_markup"] = _strip_button_styles(markup)
             return tg_api(token, "sendMessage", payload, timeout=15).get("result")
         raise
@@ -759,6 +760,15 @@ def edit_message(token: str, chat_id: int, message_id: int, text: str, reply_mar
     try:
         tg_api(token, "editMessageText", payload, timeout=15)
     except urllib.error.HTTPError as e:
+        if e.code == 400 and reply_markup is not None:
+            try:
+                payload["reply_markup"] = _strip_button_styles(reply_markup)
+                tg_api(token, "editMessageText", payload, timeout=15)
+                return
+            except urllib.error.HTTPError as e2:
+                if e2.code != 400:
+                    raise
+                return
         if e.code != 400:
             raise
 
@@ -1088,8 +1098,8 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
         )
         kb = {
             "inline_keyboard": [
-                [{"text": f"➕ شارژ نمایندگی (حداقل {min_tmn:,} ت)", "callback_data": "reseller_topup"}],
-                [{"text": "📩 ارسال درخواست نمایندگی به ادمین", "callback_data": "reseller_apply"}],
+                [{"text": f"➕ شارژ نمایندگی (حداقل {min_tmn:,} ت)", "callback_data": "reseller_topup", "style": "success"}],
+                [{"text": "📩 ارسال درخواست نمایندگی به ادمین", "callback_data": "reseller_apply", "style": "primary"}],
             ]
         }
         if message_id is not None:
@@ -1112,10 +1122,10 @@ def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: 
     )
     kb = {
         "inline_keyboard": [
-            [{"text": "➕ ساخت اکانت جدید", "callback_data": "res_create"}, {"text": "📦 ساخت گروهی (Bulk)", "callback_data": "res_bulk"}],
-            [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup"}],
+            [{"text": "➕ ساخت اکانت جدید", "callback_data": "res_create", "style": "success"}, {"text": "📦 ساخت گروهی (Bulk)", "callback_data": "res_bulk", "style": "primary"}],
+            [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list", "style": "primary"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup", "style": "success"}],
             [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}, {"text": "📡 وضعیت سرورها", "callback_data": "res_nodes"}],
-            [{"text": "🤖 ربات اختصاصی من (White-Label)", "callback_data": "res_subbot"}],
+            [{"text": "🤖 ربات اختصاصی من (White-Label)", "callback_data": "res_subbot", "style": "primary"}],
         ]
     }
     if message_id is not None:
@@ -1393,10 +1403,10 @@ def send_qr_with_sub(token: str, chat_id: int, sub_url: str, caption: str, env: 
 def build_gb_keyboard(prefix: str = "buy", env: dict[str, str] | None = None) -> dict:
     gb_list = get_settings(env or load_env()).get("gb_options") or DEFAULT_GB_OPTIONS
     rows = [
-        [{"text": f"{g} گیگ", "callback_data": f"{prefix}_gb:{g}"} for g in gb_list[i:i+3]]
+        [{"text": f"📦 {g} گیگ", "callback_data": f"{prefix}_gb:{g}"} for g in gb_list[i:i+3]]
         for i in range(0, len(gb_list), 3)
     ]
-    rows.append([{"text": "✏️ حجم دلخواه", "callback_data": f"{prefix}_gb:custom"}])
+    rows.append([{"text": "✏️ حجم دلخواه", "callback_data": f"{prefix}_gb:custom", "style": "primary"}])
     return {"inline_keyboard": rows}
 
 
@@ -1409,10 +1419,10 @@ def build_month_keyboard(gb: int, env: dict[str, str] | None = None, prefix: str
         val = max(0, m - 1) * pct
         return str(int(val) if val == int(val) else val)
     rows = [
-        [{"text": "۱ ماهه (۰٪)", "callback_data": f"{prefix}_m:{gb}:1"}, {"text": f"۲ ماهه (+{fmt(2)}٪)", "callback_data": f"{prefix}_m:{gb}:2"}],
+        [{"text": "۱ ماهه (۰٪)", "callback_data": f"{prefix}_m:{gb}:1", "style": "success"}, {"text": f"۲ ماهه (+{fmt(2)}٪)", "callback_data": f"{prefix}_m:{gb}:2"}],
         [{"text": f"۳ ماهه (+{fmt(3)}٪)", "callback_data": f"{prefix}_m:{gb}:3"}, {"text": f"۶ ماهه (+{fmt(6)}٪)", "callback_data": f"{prefix}_m:{gb}:6"}],
-        [{"text": f"۱۲ ماهه / ۱ سال (+{fmt(12)}٪)", "callback_data": f"{prefix}_m:{gb}:12"}],
-        [{"text": f"✏️ مدت دلخواه ({pct_s}٪ هر ماه)", "callback_data": f"{prefix}_m:{gb}:custom"}, {"text": "🔙 تغییر حجم", "callback_data": f"{prefix}_restart"}],
+        [{"text": f"۱۲ ماهه / ۱ سال (+{fmt(12)}٪)", "callback_data": f"{prefix}_m:{gb}:12", "style": "primary"}],
+        [{"text": f"✏️ مدت دلخواه ({pct_s}٪ هر ماه)", "callback_data": f"{prefix}_m:{gb}:custom", "style": "primary"}, {"text": "🔙 تغییر حجم", "callback_data": f"{prefix}_restart", "style": "danger"}],
     ]
     return {"inline_keyboard": rows}
 
@@ -1545,12 +1555,12 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "🆔 آیدی مقصد بکاپ", "callback_data": "adm_set:backup_chat_id"}],
         ])
     kb_rows.extend([
-        [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
-        [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
-        [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes"}],
+        [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode", "style": "primary"}],
+        [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint", "style": "danger"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
+        [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes", "style": "success"}],
     ])
     if not tenant:
-        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}])
+        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh", "style": "primary"}])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
         edit_message(token, chat_id, message_id, txt, reply_markup=kb)
@@ -1606,13 +1616,13 @@ def show_invoice(
     bal = get_wallet_balance(chat_id)
     pay_rows = []
     if bal >= p["total_toman"]:
-        pay_rows.append([{"text": f"👛 پرداخت آنی از کیف پول (موجودی: {bal:,} ت)", "callback_data": f"pay:wallet:{inv_id}"}])
+        pay_rows.append([{"text": f"👛 پرداخت آنی از کیف پول (موجودی: {bal:,} ت)", "callback_data": f"pay:wallet:{inv_id}", "style": "success"}])
     card_lbl = "💳 پرداخت کارت‌به‌کارت (فعال‌سازی آنی)" if get_settings(env).get("card_instant_mode", "all") != "off" else "💳 پرداخت کارت‌به‌کارت"
     pay_rows.extend([
-        [{"text": card_lbl, "callback_data": f"pay:card:{inv_id}"}],
-        [{"text": "🪙 پرداخت تتر (BEP20 - تایید خودکار)", "callback_data": f"pay:usdt:{inv_id}"}],
-        [{"text": "🎟 اعمال کد تخفیف", "callback_data": f"coupon:{inv_id}"}],
-        [{"text": "🔙 تغییر مدت", "callback_data": f"{prefix}_gb:{gb}"}],
+        [{"text": card_lbl, "callback_data": f"pay:card:{inv_id}", "style": "primary"}],
+        [{"text": "🪙 پرداخت تتر (BEP20 - تایید خودکار)", "callback_data": f"pay:usdt:{inv_id}", "style": "primary"}],
+        [{"text": "🎟 اعمال کد تخفیف", "callback_data": f"coupon:{inv_id}", "style": "success"}],
+        [{"text": "🔙 تغییر مدت", "callback_data": f"{prefix}_gb:{gb}", "style": "danger"}],
     ])
     kb = {"inline_keyboard": pay_rows}
     if message_id is not None:
@@ -1935,8 +1945,8 @@ def handle_receipt_submission(token: str, env: dict[str, str], m: dict, st: dict
     kb = {
         "inline_keyboard": [
             [
-                {"text": "✅ تایید و ساخت خودکار", "callback_data": f"adm_ok:{order_id}"},
-                {"text": "❌ رد سفارش", "callback_data": f"adm_no:{order_id}"},
+                {"text": "✅ تایید و ساخت خودکار", "callback_data": f"adm_ok:{order_id}", "style": "success"},
+                {"text": "❌ رد سفارش", "callback_data": f"adm_no:{order_id}", "style": "danger"},
             ]
         ]
     }
@@ -2017,7 +2027,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         bal = get_wallet_balance(user_id)
         kb = {
             "inline_keyboard": [
-                [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}, {"text": "💸 انتقال موجودی", "callback_data": "wallet_transfer"}],
+                [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup", "style": "success"}, {"text": "💸 انتقال موجودی", "callback_data": "wallet_transfer", "style": "primary"}],
                 [{"text": "📜 گزارش تراکنش‌ها", "callback_data": "wallet_ledger"}],
             ]
         }
