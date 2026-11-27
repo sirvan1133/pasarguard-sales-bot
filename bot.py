@@ -79,6 +79,7 @@ BTN_REFERRAL = "👥 معرفی به دوستان"
 BTN_SUPPORT = "☎️ پشتیبانی"
 BTN_RESELLER = "💼 پنل نمایندگی"
 BTN_HELP = "📚 آموزش"
+BTN_MENU_MODE = "🎛 تغییر حالت منو"
 BTN_ADMIN = "👑 پنل ادمین"
 
 
@@ -152,11 +153,10 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": BTN_WALLET}, {"text": BTN_HELP}],
         [{"text": BTN_REFERRAL}, {"text": BTN_SUPPORT}],
         [{"text": BTN_TRIAL}, {"text": BTN_RESELLER}],
+        [{"text": BTN_CHECK}, {"text": BTN_MENU_MODE}],
     ]
     if user_id in get_admin_ids(env):
-        rows.append([{"text": BTN_CHECK}, {"text": BTN_ADMIN}])
-    else:
-        rows.append([{"text": BTN_CHECK}])
+        rows.append([{"text": BTN_ADMIN}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
 
@@ -2048,15 +2048,28 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         )
         return
 
+    if t == BTN_MENU_MODE:
+        user_states.pop(user_id, None)
+        cur = get_user_menu_mode(user_id)
+        nxt = {"both": "inline", "inline": "keyboard", "keyboard": "both"}.get(cur, "both")
+        set_user_menu_mode(user_id, nxt)
+        lbl = {"both": "کیبورد + شیشه‌ای", "inline": "فقط شیشه‌ای", "keyboard": "فقط کیبوردی"}[nxt]
+        send_message(token, chat_id, f"✅ حالت منوی شما به <b>{lbl}</b> تغییر یافت.", env=env, user_id=user_id)
+        if nxt in ("both", "inline"):
+            send_message(token, chat_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
+        return
+
     if t == "/start" or t.startswith("/start ") or t == "/menu":
         user_states.pop(user_id, None)
         mode = get_user_menu_mode(user_id)
         send_message(
             token,
             chat_id,
-            f"👋 <b>به ربات فروش اشتراک خوش آمدید</b>\n\n"
-            f"🆔 آیدی عددی شما (برای کپی لمس کنید): <code>{user_id}</code>\n\n"
-            "از منوی شیشه‌ای یا دکمه‌های زیر انتخاب کنید:",
+            "👋 <b>به ربات فروش اشتراک خوش آمدید!</b>\n\n"
+            "• خرید و تمدید فوری با حجم و مدت دلخواه\n"
+            "• پرداخت کارت‌به‌کارت آنی و تتر خودکار (BEP20)\n"
+            "• تست رایگان، کیف پول، معرفی دوستان و پشتیبانی\n\n"
+            f"🆔 آیدی عددی شما (برای کپی لمس کنید): <code>{user_id}</code>",
             env=env,
             user_id=user_id,
         )
