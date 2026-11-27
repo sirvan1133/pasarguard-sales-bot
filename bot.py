@@ -2029,7 +2029,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "panel_url": "آدرس پنل (مثلاً https://panel.example.com:8443)",
             "panel_user": "نام کاربری ادمین پنل",
             "panel_pass": "رمز عبور ادمین پنل",
-            "group_id": "آیدی عددی گروه پنل (پیش‌فرض 1)",
+            "group_id": "آیدی عددی گروه در پنل PasarGuard که کاربران جدید عضو آن می‌شوند (در پنل‌های تک‌گروهه همان 1 است)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
