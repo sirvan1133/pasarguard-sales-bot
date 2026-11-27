@@ -8,6 +8,7 @@ import re
 import secrets
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -183,6 +184,7 @@ def get_settings(env: dict[str, str]) -> dict:
         "pct_over_threshold": 1.0,
         "bulk_threshold_gb": 100,
         "renew_discount_pct": 10.0,
+        "global_discount_pct": 0.0,
         "trial_enabled": True,
         "trial_gb": 1,
         "trial_hours": 24,
@@ -190,6 +192,9 @@ def get_settings(env: dict[str, str]) -> dict:
         "referral_reward_pct": 20.0,
         "reminder_days": 3,
         "reminder_pct": 10,
+        "force_join_enabled": False,
+        "force_join_channel": "",
+        "max_pending_orders": 2,
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -229,7 +234,8 @@ def calc_price(
     pct_under = float(cfg["pct_under_threshold"])
     pct_over = float(cfg["pct_over_threshold"])
     renew_pct = float(cfg["renew_discount_pct"]) if is_renew else 0.0
-    total_discount_pct = min(90.0, renew_pct + float(coupon_pct or 0.0))
+    global_pct = float(cfg.get("global_discount_pct", 0.0) or 0.0)
+    total_discount_pct = min(90.0, renew_pct + global_pct + float(coupon_pct or 0.0))
     if months <= 1:
         surcharge_pct = 0.0
     elif gb >= threshold:
@@ -246,6 +252,7 @@ def calc_price(
         "months": months,
         "surcharge_pct": int(surcharge_pct) if surcharge_pct == int(surcharge_pct) else surcharge_pct,
         "discount_pct": int(renew_pct) if renew_pct == int(renew_pct) else renew_pct,
+        "global_discount_pct": int(global_pct) if global_pct == int(global_pct) else global_pct,
         "coupon_pct": int(coupon_pct) if float(coupon_pct) == int(coupon_pct) else float(coupon_pct),
         "total_discount_pct": int(total_discount_pct) if total_discount_pct == int(total_discount_pct) else total_discount_pct,
         "per_gb": per_gb,
@@ -646,6 +653,38 @@ def send_connection_guide(token: str, chat_id: int, env: dict[str, str], user_id
     send_message(token, chat_id, txt, env=env, user_id=user_id)
 
 
+def check_force_join(token: str, env: dict[str, str], chat_id: int, user_id: int) -> bool:
+    cfg = get_settings(env)
+    if not cfg.get("force_join_enabled") or user_id in get_admin_ids(env):
+        return True
+    ch = str(cfg.get("force_join_channel") or "").strip()
+    if not ch:
+        return True
+    if not ch.startswith("@") and not ch.lstrip("-").isdigit():
+        ch = f"@{ch}"
+    try:
+        res = tg_api(token, "getChatMember", {"chat_id": ch, "user_id": user_id}, timeout=8).get("result", {})
+        if res.get("status") in ("member", "administrator", "creator"):
+            return True
+    except Exception as e:
+        log.warning("Force join check failed for %s: %s", ch, e)
+        return True
+    ch_url = f"https://t.me/{ch.lstrip('@')}" if ch.startswith("@") else "https://t.me"
+    kb = {
+        "inline_keyboard": [
+            [{"text": "📢 عضویت در کانال", "url": ch_url}],
+            [{"text": "✅ عضو شدم", "callback_data": "check_join"}],
+        ]
+    }
+    send_message(
+        token,
+        chat_id,
+        f"📢 <b>برای استفاده از این بخش ابتدا در کانال ما عضو شوید:</b>\n{html.escape(ch)}\n\nپس از عضویت روی <b>✅ عضو شدم</b> بزنید.",
+        reply_markup=kb,
+    )
+    return False
+
+
 def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = None) -> int:
     files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH]
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
@@ -752,6 +791,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     except Exception:
         rate_s = "خطا"
     trial_s = f"فعال ({cfg['trial_gb']}GB / {cfg['trial_hours']}h / هر {cfg['trial_cooldown_days']} روز)" if cfg.get("trial_enabled", True) else "غیرفعال"
+    fj_s = f"فعال ({cfg['force_join_channel']})" if cfg.get("force_join_enabled") else "غیرفعال"
     txt = (
         "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
         f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
@@ -760,10 +800,10 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"💵 نرخ لحظه‌ای تتر: <code>{rate_s}</code>\n\n"
         "⚙️ <b>تنظیمات فعلی:</b>\n"
         f"• قیمت پایه هر گیگ: <code>{int(cfg['base_price_per_gb']):,}</code> تومان\n"
-        f"• سود ماهانه زیر {cfg['bulk_threshold_gb']}GB: <code>{cfg['pct_under_threshold']}٪</code>\n"
-        f"• سود ماهانه {cfg['bulk_threshold_gb']}GB به بالا: <code>{cfg['pct_over_threshold']}٪</code>\n"
-        f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | پاداش رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
+        f"• سود ماهانه زیر {cfg['bulk_threshold_gb']}GB: <code>{cfg['pct_under_threshold']}٪</code> | {cfg['bulk_threshold_gb']}GB+: <code>{cfg['pct_over_threshold']}٪</code>\n"
+        f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | کمپین همگانی: <code>{cfg['global_discount_pct']}٪</code> | رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
         f"• تست رایگان: <code>{trial_s}</code>\n"
+        f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
@@ -773,18 +813,21 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     )
     kb = {
         "inline_keyboard": [
-            [{"text": "💵 تغییر قیمت هر گیگ", "callback_data": "adm_set:base_price_per_gb"}, {"text": "🎯 آستانه حجم عمده", "callback_data": "adm_set:bulk_threshold_gb"}],
+            [{"text": "💵 قیمت هر گیگ", "callback_data": "adm_set:base_price_per_gb"}, {"text": "🎯 آستانه عمده", "callback_data": "adm_set:bulk_threshold_gb"}],
             [{"text": "📉 سود زیر آستانه (٪)", "callback_data": "adm_set:pct_under_threshold"}, {"text": "📈 سود بالای آستانه (٪)", "callback_data": "adm_set:pct_over_threshold"}],
-            [{"text": "🎁 تخفیف تمدید (٪)", "callback_data": "adm_set:renew_discount_pct"}, {"text": "🤝 پاداش رفرال (٪)", "callback_data": "adm_set:referral_reward_pct"}],
+            [{"text": "🎁 تخفیف تمدید (٪)", "callback_data": "adm_set:renew_discount_pct"}, {"text": "🏷 تخفیف همگانی (٪)", "callback_data": "adm_set:global_discount_pct"}],
+            [{"text": "🤝 پاداش رفرال (٪)", "callback_data": "adm_set:referral_reward_pct"}, {"text": "🛡 سقف سفارش در انتظار", "callback_data": "adm_set:max_pending_orders"}],
             [{"text": "🎁 روشن/خاموش تست", "callback_data": "adm_toggle_trial"}, {"text": "📦 حجم تست (GB)", "callback_data": "adm_set:trial_gb"}],
             [{"text": "⏱ مدت تست (ساعت)", "callback_data": "adm_set:trial_hours"}, {"text": "📆 فاصله تست (روز)", "callback_data": "adm_set:trial_cooldown_days"}],
             [{"text": "⏳ روز یادآور انقضا", "callback_data": "adm_set:reminder_days"}, {"text": "📉 درصد حجم یادآور", "callback_data": "adm_set:reminder_pct"}],
-            [{"text": "💳 تغییر شماره کارت", "callback_data": "adm_set:card_number"}, {"text": "👤 تغییر نام صاحب کارت", "callback_data": "adm_set:card_owner"}],
+            [{"text": "📢 روشن/خاموش قفل کانال", "callback_data": "adm_toggle_force_join"}, {"text": "📢 آیدی کانال قفل", "callback_data": "adm_set:force_join_channel"}],
+            [{"text": "💳 تغییر شماره کارت", "callback_data": "adm_set:card_number"}, {"text": "👤 تغییر صاحب کارت", "callback_data": "adm_set:card_owner"}],
             [{"text": "🪙 آدرس تتر BEP20", "callback_data": "adm_set:usdt_bep20"}, {"text": "🎟 مدیریت کد تخفیف", "callback_data": "adm_coupons"}],
             [{"text": "🌐 آدرس پنل", "callback_data": "adm_set:panel_url"}, {"text": "👤 یوزر پنل", "callback_data": "adm_set:panel_user"}],
             [{"text": "🔑 رمز پنل", "callback_data": "adm_set:panel_pass"}, {"text": "👥 آیدی گروه پنل", "callback_data": "adm_set:group_id"}],
-            [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
-            [{"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}, {"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}],
+            [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
+            [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
+            [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
             [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
         ]
     }
@@ -820,6 +863,8 @@ def show_invoice(
     disc_lines = []
     if is_renew and p["discount_pct"] > 0:
         disc_lines.append(f"🎁 تخفیف تمدید: <b>{p['discount_pct']}٪</b>")
+    if p["global_discount_pct"] > 0:
+        disc_lines.append(f"🏷 تخفیف ویژه کمپین: <b>{p['global_discount_pct']}٪</b>")
     if coupon_code and p["coupon_pct"] > 0:
         disc_lines.append(f"🎟 کد تخفیف <code>{html.escape(coupon_code)}</code>: <b>{p['coupon_pct']}٪</b>")
     disc_block = ""
@@ -986,6 +1031,18 @@ def handle_receipt_submission(token: str, env: dict[str, str], m: dict, st: dict
 
     with orders_lock:
         orders = load_json(ORDERS_PATH)
+        max_pend = int(get_settings(env).get("max_pending_orders", 2))
+        if user_id not in get_admin_ids(env):
+            pend_cnt = sum(1 for o in orders.values() if o.get("user_id") == user_id and o.get("status") == "pending")
+            if pend_cnt >= max_pend:
+                send_message(
+                    token,
+                    m["chat"]["id"],
+                    f"⏳ شما هم‌اکنون <b>{pend_cnt}</b> سفارش در انتظار تایید دارید. لطفاً تا بررسی مدیریت صبر کنید.",
+                    env=env,
+                    user_id=user_id,
+                )
+                return
         if tx_key:
             for existing_id, existing in orders.items():
                 if existing.get("status") in ("pending", "processing", "approved") and existing.get("tx_key") == tx_key:
@@ -1177,6 +1234,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_TRIAL or t == "/trial":
         user_states.pop(user_id, None)
+        if not check_force_join(token, env, chat_id, user_id):
+            return
         cfg = get_settings(env)
         if not cfg.get("trial_enabled", True):
             send_message(token, chat_id, "⛔ بخش تست رایگان در حال حاضر غیرفعال است.", env=env, user_id=user_id)
@@ -1269,11 +1328,15 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_BUY or t == "/buy":
         user_states.pop(user_id, None)
+        if not check_force_join(token, env, chat_id, user_id):
+            return
         send_message(token, chat_id, "📦 <b>مرحله ۱:</b> حجم مورد نظر (به گیگابایت) را انتخاب کنید:", reply_markup=build_gb_keyboard("buy"))
         return
 
     if t == BTN_RENEW or t == "/renew":
         user_states.pop(user_id, None)
+        if not check_force_join(token, env, chat_id, user_id):
+            return
         cfg = get_settings(env)
         disc = cfg["renew_discount_pct"]
         orders = load_json(ORDERS_PATH)
@@ -1543,11 +1606,63 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             send_message(token, chat_id, f"📢 <b>پیش‌نمایش پیام همگانی:</b>\n\n{html.escape(t)}\n\nآیا ارسال شود؟", reply_markup=kb)
             return
 
+        if step == "await_find_user" and user_id in get_admin_ids(env):
+            user_states.pop(user_id, None)
+            q = t.strip()
+            orders = load_json(ORDERS_PATH)
+            users = load_json(USERS_PATH)
+            target_uid = int(q) if q.isdigit() else None
+            target_uname = "" if q.isdigit() else q
+            if target_uid is None:
+                for o in orders.values():
+                    if o.get("panel_username") == target_uname:
+                        target_uid = o.get("user_id")
+                        break
+            else:
+                for o in sorted(orders.values(), key=lambda x: x.get("created_at", 0), reverse=True):
+                    if o.get("user_id") == target_uid and o.get("panel_username"):
+                        target_uname = o["panel_username"]
+                        break
+
+            lines = [f"🔍 <b>نتیجه جستجو:</b> <code>{html.escape(q)}</code>\n"]
+            kb_rows = []
+            if target_uid is not None:
+                u_rec = users.get(str(target_uid), {})
+                u_orders = [o for o in orders.values() if o.get("user_id") == target_uid]
+                app_cnt = sum(1 for o in u_orders if o.get("status") == "approved")
+                lines.append(
+                    f"👤 تلگرام: <code>{target_uid}</code> (@{html.escape(str(u_rec.get('username') or '-'))})\n"
+                    f"👛 کیف پول: <b>{int(u_rec.get('balance_toman', 0)):,} تومان</b> | سفارش موفق: <b>{app_cnt}</b>"
+                )
+                kb_rows.append([{"text": "👛 تغییر کیف پول", "callback_data": f"adm_u_wallet:{target_uid}"}])
+            if target_uname:
+                try:
+                    pu = panel_request(env, f"/api/user/{urllib.parse.quote(target_uname)}")
+                    used_gb = round((pu.get("used_traffic") or 0) / (1024**3), 2)
+                    lim_gb = round((pu.get("data_limit") or 0) / (1024**3), 2)
+                    st_p = pu.get("status", "?")
+                    lines.append(
+                        f"\n🆔 اکانت پنل: <code>{html.escape(target_uname)}</code>\n"
+                        f"• وضعیت: <b>{html.escape(str(st_p))}</b> | مصرف: <b>{used_gb}/{lim_gb} GB</b>"
+                    )
+                    tog_txt = "⏸ غیرفعال‌سازی" if st_p == "active" else "▶️ فعال‌سازی"
+                    kb_rows.append([
+                        {"text": "➕ ۵ گیگ هدیه", "callback_data": f"adm_u_addgb:{target_uname}:5"},
+                        {"text": "⏳ ۳۰ روز هدیه", "callback_data": f"adm_u_adddays:{target_uname}:30"},
+                    ])
+                    kb_rows.append([{"text": tog_txt, "callback_data": f"adm_u_toggle:{target_uname}"}])
+                except Exception as e:
+                    lines.append(f"\n⚠️ اکانت پنل <code>{html.escape(target_uname)}</code> یافت نشد: {html.escape(str(e))}")
+            if not kb_rows:
+                lines.append("❌ موردی پیدا نشد.")
+            send_message(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows} if kb_rows else None, env=env, user_id=user_id)
+            return
+
         if step == "await_admin_setting" and user_id in get_admin_ids(env):
             user_states.pop(user_id, None)
             key = st["key"]
             try:
-                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id"):
+                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders"):
                     val = int(t.replace(",", "").strip())
                     if val <= 0:
                         raise ValueError("باید مثبت باشد")
@@ -1555,7 +1670,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                     val = int(t.replace("%", "").strip())
                     if val < 1 or val > 90:
                         raise ValueError("باید بین ۱ تا ۹۰ باشد")
-                elif key in ("pct_under_threshold", "pct_over_threshold", "renew_discount_pct", "referral_reward_pct"):
+                elif key in ("pct_under_threshold", "pct_over_threshold", "renew_discount_pct", "global_discount_pct", "referral_reward_pct"):
                     val = float(t.replace("%", "").strip())
                     if val < 0 or val > 100:
                         raise ValueError("باید بین ۰ تا ۱۰۰ باشد")
@@ -1658,6 +1773,14 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             send_message(token, chat_id, f"✏️ مدت دلخواه برای <b>{gb} گیگ</b> را به عدد (تعداد ماه) بفرستید:", env=env, user_id=user_id)
             return
         show_invoice(token, chat_id, gb, int(m_s), message_id=msg_id, env=env, target_username=target_username)
+        return
+
+    if data == "check_join":
+        if check_force_join(token, env, chat_id, user_id):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ عضویت تایید شد!"})
+            edit_message(token, chat_id, msg_id, "✅ عضویت شما تایید شد! حالا می‌توانید از دکمه‌های منو استفاده کنید.")
+        else:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ هنوز عضو کانال نشده‌اید", "show_alert": True})
         return
 
     if data == "conn_guide":
@@ -1909,6 +2032,82 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         send_message(token, chat_id, rep, env=env, user_id=user_id)
         return
 
+    if data == "adm_toggle_force_join":
+        if user_id not in get_admin_ids(env):
+            return
+        cur = bool(get_settings(env).get("force_join_enabled", False))
+        update_setting(env, "force_join_enabled", not cur)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ وضعیت قفل کانال تغییر یافت"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
+    if data == "adm_find_user":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_find_user"}
+        send_message(token, chat_id, "🔍 آیدی عددی تلگرام کاربر یا نام کاربری اکانت پنل (مثلاً <code>u_a1b2c3d4</code>) را بفرستید:", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_u_wallet:"):
+        if user_id not in get_admin_ids(env):
+            return
+        t_uid = data.split(":", 1)[1]
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_admin_wallet"}
+        send_message(token, chat_id, f"👛 مبلغ را با آیدی بفرستید:\n<code>{t_uid} 100000</code>", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_u_addgb:") or data.startswith("adm_u_adddays:") or data.startswith("adm_u_toggle:"):
+        if user_id not in get_admin_ids(env):
+            return
+        parts = data.split(":")
+        act, uname = parts[0], parts[1]
+        try:
+            pu = panel_request(env, f"/api/user/{urllib.parse.quote(uname)}")
+            if act == "adm_u_addgb":
+                add_b = int(parts[2]) * 1024 * 1024 * 1024
+                new_lim = int(pu.get("data_limit") or 0) + add_b
+                panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"data_limit": new_lim})
+                msg_ok = f"✅ +{parts[2]} گیگ به <code>{html.escape(uname)}</code> اضافه شد."
+            elif act == "adm_u_adddays":
+                now_ts = int(time.time())
+                cur_exp = pu.get("expire")
+                base_ts = cur_exp if isinstance(cur_exp, (int, float)) and cur_exp > now_ts else now_ts
+                new_exp = int(base_ts) + int(parts[2]) * 86400
+                panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"expire": new_exp, "status": "active"})
+                msg_ok = f"✅ +{parts[2]} روز به <code>{html.escape(uname)}</code> اضافه شد."
+            else:
+                new_st = "disabled" if pu.get("status") == "active" else "active"
+                panel_request(env, f"/api/user/{urllib.parse.quote(uname)}", method="PUT", body={"status": new_st})
+                msg_ok = f"✅ وضعیت <code>{html.escape(uname)}</code> به <b>{new_st}</b> تغییر یافت."
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ انجام شد"})
+            send_message(token, chat_id, msg_ok, env=env, user_id=user_id)
+        except Exception as e:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ خطا", "show_alert": True})
+            send_message(token, chat_id, f"❌ خطا: {html.escape(str(e))}", env=env, user_id=user_id)
+        return
+
+    if data == "adm_update_bot":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال دانلود آپدیت..."})
+        try:
+            url = "https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/main/bot.py"
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.5.0"})
+            new_code = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+            cur_path = Path(__file__).resolve()
+            tmp_path = cur_path.with_suffix(".py.new")
+            tmp_path.write_text(new_code, encoding="utf-8")
+            subprocess.run([sys.executable, "-m", "py_compile", str(tmp_path)], check=True, timeout=10)
+            os.replace(tmp_path, cur_path)
+            os.chmod(cur_path, 0o700)
+            send_message(token, chat_id, "✅ آخرین نسخه از گیت‌هاب دریافت و کامپایل شد. در حال ری‌استارت ربات...", env=env, user_id=user_id)
+            os.execv(sys.executable, [sys.executable, str(cur_path)])
+        except Exception as e:
+            send_message(token, chat_id, f"❌ خطا در آپدیت از گیت‌هاب: {html.escape(str(e))}", env=env, user_id=user_id)
+        return
+
     if data == "adm_toggle_trial":
         if user_id not in get_admin_ids(env):
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -2018,7 +2217,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "pct_under_threshold": "درصد سود ماهانه زیر آستانه (مثلاً 2)",
             "pct_over_threshold": "درصد سود ماهانه بالای آستانه (مثلاً 1)",
             "renew_discount_pct": "درصد تخفیف تمدید (مثلاً 10)",
+            "global_discount_pct": "درصد تخفیف همگانی کمپین (مثلاً 15 و برای غیرفعال 0)",
             "referral_reward_pct": "درصد کد تخفیف پاداش رفرال (مثلاً 20)",
+            "max_pending_orders": "حداکثر سفارش در انتظار همزمان برای هر کاربر (مثلاً 2)",
+            "force_join_channel": "آیدی کانال قفل اجباری (مثلاً @MyChannel)",
             "trial_gb": "حجم تست رایگان به گیگابایت (مثلاً 1)",
             "trial_hours": "مدت تست رایگان به ساعت (مثلاً 24)",
             "trial_cooldown_days": "فاصله زمانی بین هر تست رایگان به روز (مثلاً 7)",
