@@ -65,7 +65,6 @@ BTN_RENEW = "🔄 تمدید اشتراک"
 BTN_TRIAL = "🎁 تست رایگان"
 BTN_MY_SUBS = "📦 اشتراک‌های من"
 BTN_WALLET = "👛 کیف پول"
-BTN_PRICES = "💰 تعرفه و قیمت روز"
 BTN_CHECK = "📊 استعلام اشتراک"
 BTN_REFERRAL = "🤝 دعوت دوستان"
 BTN_SUPPORT = "👨‍💻 پشتیبانی"
@@ -95,9 +94,8 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": BTN_BUY}, {"text": BTN_RENEW}],
         [{"text": BTN_TRIAL}, {"text": BTN_MY_SUBS}],
         [{"text": BTN_WALLET}, {"text": BTN_CHECK}],
-        [{"text": BTN_PRICES}, {"text": BTN_REFERRAL}],
-        [{"text": BTN_RESELLER}, {"text": BTN_SUPPORT}],
-        [{"text": BTN_HELP}],
+        [{"text": BTN_RESELLER}, {"text": BTN_REFERRAL}],
+        [{"text": BTN_SUPPORT}, {"text": BTN_HELP}],
     ]
     if user_id in get_admin_ids(env):
         rows.append([{"text": BTN_ADMIN}])
@@ -1612,26 +1610,6 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             f"🔄 <b>تمدید اشتراک (با {disc}٪ تخفیف ویژه)</b>\n\nاشتراک مورد نظر را انتخاب کنید یا نام کاربری/لینک ساب خود را وارد کنید:",
             reply_markup={"inline_keyboard": buttons},
         )
-        return
-
-    if t == BTN_PRICES or t == "/prices":
-        user_states.pop(user_id, None)
-        try:
-            cfg = get_settings(env)
-            rate = get_usdt_toman_rate()
-            lines = [f"💰 <b>تعرفه و نرخ لحظه‌ای</b>\n💵 نرخ فعلی تتر: <code>{rate:,}</code> تومان\n"]
-            for gb in cfg.get("gb_options", DEFAULT_GB_OPTIONS):
-                p1 = calc_price(gb, 1, env)
-                p12 = calc_price(gb, 12, env)
-                lines.append(
-                    f"• <b>{gb} گیگ</b>:\n"
-                    f"  ۱ ماهه: <code>{p1['total_toman']:,}</code> ت (<code>{p1['usdt_amount']}</code> USDT)\n"
-                    f"  ۱۲ ماهه (+{p12['surcharge_pct']}٪): <code>{p12['total_toman']:,}</code> ت (<code>{p12['usdt_amount']}</code> USDT)"
-                )
-            lines.append(f"\n📌 زیر {cfg['bulk_threshold_gb']} گیگ: هر ماه {cfg['pct_under_threshold']}٪ | {cfg['bulk_threshold_gb']} گیگ و بالاتر: هر ماه {cfg['pct_over_threshold']}٪")
-            send_message(token, chat_id, "\n".join(lines), env=env, user_id=user_id)
-        except Exception as e:
-            send_message(token, chat_id, f"❌ خطا در دریافت نرخ: {html.escape(str(e))}", env=env, user_id=user_id)
         return
 
     if t == BTN_MY_SUBS:
@@ -3417,7 +3395,6 @@ def main() -> None:
                     {"command": "renew", "description": "تمدید اشتراک با تخفیف"},
                     {"command": "trial", "description": "دریافت تست رایگان"},
                     {"command": "wallet", "description": "کیف پول و شارژ حساب"},
-                    {"command": "prices", "description": "مشاهده تعرفه و نرخ لحظه‌ای تتر"},
                     {"command": "support", "description": "ارتباط با پشتیبانی"},
                     {"command": "guide", "description": "راهنمای اتصال"},
                 ]
