@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import os
+import random
 import re
 import secrets
 import ssl
@@ -127,6 +128,11 @@ def get_panel_config(env: dict[str, str]) -> dict:
     }
 
 
+def is_demo_mode(env: dict[str, str] | None = None) -> bool:
+    e = env or load_env()
+    return str(e.get("DEMO_MODE", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_admin_ids(env: dict[str, str]) -> set[int]:
     return {int(x.strip()) for x in env.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
@@ -146,7 +152,7 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         return {"remove_keyboard": True}
     miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
     rows = []
-    if miniapp_url and not is_tenant_bot(env):
+    if miniapp_url and not is_tenant_bot(env) and not is_demo_mode(env):
         rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}}])
     rows.extend([
         [{"text": BTN_BUY}],
@@ -156,7 +162,7 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": BTN_TRIAL}, {"text": BTN_RESELLER}],
         [{"text": BTN_CHECK}],
     ])
-    if user_id in get_admin_ids(env):
+    if user_id in get_admin_ids(env) or is_demo_mode(env):
         rows.append([{"text": BTN_ADMIN}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
@@ -166,7 +172,7 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
     res_lbl = "💼 پنل نمایندگی" if is_res else "🤝 درخواست نمایندگی"
     miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
     rows = []
-    if miniapp_url and not is_tenant_bot(env):
+    if miniapp_url and not is_tenant_bot(env) and not is_demo_mode(env):
         rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}, "style": "primary"}])
     rows.extend([
         [{"text": "🛒 خرید سرویس جدید", "callback_data": "home:buy", "style": "success"}],
@@ -188,8 +194,9 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
         ],
         [{"text": res_lbl, "callback_data": "res_panel", "style": "danger"}],
     ])
-    if user_id in get_admin_ids(env):
-        rows.append([{"text": "👑 پنل ادمین", "callback_data": "adm_open", "style": "primary"}])
+    if user_id in get_admin_ids(env) or is_demo_mode(env):
+        adm_lbl = "👑 پنل ادمین (نمایشی)" if is_demo_mode(env) else "👑 پنل ادمین"
+        rows.append([{"text": adm_lbl, "callback_data": "adm_open", "style": "primary"}])
     return {"inline_keyboard": rows}
 
 
@@ -603,6 +610,17 @@ def create_panel_user(
     hours: int | None = None,
     custom_prefix: str | None = None,
 ) -> dict:
+    if is_demo_mode(env):
+        uname = f"demo_{order_id.lower()}"
+        duration_sec = (hours * 3600) if hours is not None else (months * 30 * 86400)
+        return {
+            "username": uname,
+            "status": "active",
+            "data_limit": gb * 1024 * 1024 * 1024,
+            "used_traffic": 0,
+            "expire": int(time.time()) + duration_sec,
+            "subscription_url": f"https://demo-sub.example.com/sub/{secrets.token_hex(8)}",
+        }
     group_id = get_panel_config(env)["group_id"]
     data_limit = gb * 1024 * 1024 * 1024
     duration_sec = (hours * 3600) if hours is not None else (months * 30 * 86400)
@@ -629,6 +647,15 @@ def create_panel_user(
 
 
 def resolve_user_for_renew(env: dict[str, str], text: str) -> dict:
+    if is_demo_mode(env):
+        return {
+            "username": text.strip()[:24] or "demo_user",
+            "status": "active",
+            "data_limit": 50 * 1024**3,
+            "used_traffic": random.randint(2, 20) * 1024**3,
+            "expire": int(time.time()) + 15 * 86400,
+            "subscription_url": f"https://demo-sub.example.com/sub/{secrets.token_hex(8)}",
+        }
     t = text.strip()
     m = re.search(r"/sub/([A-Za-z0-9._\-]+)", t)
     if m:
@@ -648,6 +675,15 @@ def resolve_user_for_renew(env: dict[str, str], text: str) -> dict:
 
 
 def renew_panel_user(env: dict[str, str], target_username: str, gb: int, months: int) -> dict:
+    if is_demo_mode(env):
+        return {
+            "username": target_username,
+            "status": "active",
+            "data_limit": gb * 1024**3,
+            "used_traffic": 0,
+            "expire": int(time.time()) + months * 30 * 86400,
+            "subscription_url": f"https://demo-sub.example.com/sub/{secrets.token_hex(8)}",
+        }
     u = panel_request(env, f"/api/user/{urllib.parse.quote(target_username)}")
     cur_limit = int(u.get("data_limit") or 0)
     cur_used = int(u.get("used_traffic") or 0)
@@ -1511,28 +1547,55 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه پنل: <code>{cfg['group_id']}</code>)\n"
         "💡 <i>آیدی گروه پنل مشخص می‌کند کاربران جدید عضو کدام گروه PasarGuard شوند (در پنل‌های تک‌گروهه همان 1 است).</i>\n"
     )
-    txt = (
-        "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
-        f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
-        f"{panel_stats_s}\n"
-        f"⏳ سفارش‌های در انتظار: <b>{pending}</b> | ✅ تاییدشده: <b>{len(approved)}</b>\n"
-        f"💰 فروش کل: <b>{total_tmn:,} تومان</b>\n"
-        f"💵 نرخ لحظه‌ای تتر: <code>{rate_s}</code>\n\n"
-        "⚙️ <b>تنظیمات فعلی:</b>\n"
-        f"• قیمت پایه هر گیگ: <code>{int(cfg['base_price_per_gb']):,}</code> تومان\n"
-        f"• سود ماهانه زیر {cfg['bulk_threshold_gb']}GB: <code>{cfg['pct_under_threshold']}٪</code> | {cfg['bulk_threshold_gb']}GB+: <code>{cfg['pct_over_threshold']}٪</code>\n"
-        f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | کمپین همگانی: <code>{cfg['global_discount_pct']}٪</code> | رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
-        f"• تست رایگان: <code>{trial_s}</code>\n"
-        f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
-        f"• حالت کارت‌به‌کارت: <code>{cm_s}</code> | حالت تعمیر: <code>{maint_s}</code> | هشدار معوق: <code>{cfg['pending_alert_minutes']}m</code>\n"
-        f"• نمایندگی: هر گیگ <code>{int(cfg['reseller_price_per_gb']):,}</code> ت | کف <code>{cfg['reseller_min_gb']}</code> GB | سقف تک‌اکانت <code>{cfg['reseller_max_gb_per_acc']}</code> GB\n"
-        f"• بسته‌های حجم: <code>{', '.join(str(x) for x in cfg.get('gb_options', DEFAULT_GB_OPTIONS))}</code>\n"
-        f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
-        f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
-        f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
-        f"{panel_info_line}\n"
-        "برای تغییر هر مورد روی دکمهٔ مربوطه بزنید:"
-    )
+    if is_demo_mode(env):
+        d_users = random.randint(420, 1850)
+        d_coupons = random.randint(4, 18)
+        d_active = random.randint(180, 640)
+        d_pending = random.randint(1, 9)
+        d_approved = random.randint(310, 1290)
+        d_total = random.randint(45, 290) * 1_000_000
+        d_rate = random.randint(82000, 96000)
+        txt = (
+            "🧪 <b>پنل مدیریت ربات فروش (حالت تست و نمایشی)</b>\n"
+            "⚠️ <i>این ربات در حالت تست تبلیغاتی است؛ ارقام به‌صورت تصادفی نمایش داده می‌شوند و بخش‌های تغییر تنظیمات غیرفعال هستند.</i>\n\n"
+            f"👥 کل کاربران: <b>{d_users:,}</b> | 🎟 کدهای تخفیف: <b>{d_coupons}</b>\n"
+            f"🌐 ساب‌های پنل: <b>{d_users + 120:,}</b> (فعال: <b>{d_active}</b>)\n"
+            f"⏳ سفارش‌های در انتظار: <b>{d_pending}</b> | ✅ تاییدشده: <b>{d_approved:,}</b>\n"
+            f"💰 فروش کل: <b>{d_total:,} تومان</b>\n"
+            f"💵 نرخ لحظه‌ای تتر: <code>{d_rate:,} تومان</code>\n\n"
+            "⚙️ <b>تنظیمات فعلی (نمونه نمایشی):</b>\n"
+            f"• قیمت پایه هر گیگ: <code>{random.choice([12000, 15000, 18000]):,}</code> تومان\n"
+            "• سود ماهانه زیر 100GB: <code>2.0٪</code> | 100GB+: <code>1.0٪</code>\n"
+            "• تخفیف تمدید: <code>10٪</code> | کمپین همگانی: <code>5٪</code> | رفرال: <code>20٪</code>\n"
+            "• تست رایگان: <code>فعال (1GB / 24h)</code> | قفل کانال: <code>غیرفعال (حالت تست)</code>\n"
+            "• حالت کارت‌به‌کارت: <code>فوری برای همه</code> | بکاپ خودکار: <code>غیرفعال در حالت تست</code>\n"
+            "• پنل متصل: <code>https://demo-panel.example.com:8443</code> <i>(غیرفعال در حالت تست)</i>\n"
+            "• کارت و ولت: <code>6037-99**-****-1234</code> / <code>0xDEMO...TEST</code> <i>(نمایشی)</i>\n\n"
+            "🔒 <i>تغییر متغیرها و تنظیمات حساس در نسخه نمایشی غیرفعال است.</i>"
+        )
+    else:
+        txt = (
+            "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
+            f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
+            f"{panel_stats_s}\n"
+            f"⏳ سفارش‌های در انتظار: <b>{pending}</b> | ✅ تاییدشده: <b>{len(approved)}</b>\n"
+            f"💰 فروش کل: <b>{total_tmn:,} تومان</b>\n"
+            f"💵 نرخ لحظه‌ای تتر: <code>{rate_s}</code>\n\n"
+            "⚙️ <b>تنظیمات فعلی:</b>\n"
+            f"• قیمت پایه هر گیگ: <code>{int(cfg['base_price_per_gb']):,}</code> تومان\n"
+            f"• سود ماهانه زیر {cfg['bulk_threshold_gb']}GB: <code>{cfg['pct_under_threshold']}٪</code> | {cfg['bulk_threshold_gb']}GB+: <code>{cfg['pct_over_threshold']}٪</code>\n"
+            f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | کمپین همگانی: <code>{cfg['global_discount_pct']}٪</code> | رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
+            f"• تست رایگان: <code>{trial_s}</code>\n"
+            f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
+            f"• حالت کارت‌به‌کارت: <code>{cm_s}</code> | حالت تعمیر: <code>{maint_s}</code> | هشدار معوق: <code>{cfg['pending_alert_minutes']}m</code>\n"
+            f"• نمایندگی: هر گیگ <code>{int(cfg['reseller_price_per_gb']):,}</code> ت | کف <code>{cfg['reseller_min_gb']}</code> GB | سقف تک‌اکانت <code>{cfg['reseller_max_gb_per_acc']}</code> GB\n"
+            f"• بسته‌های حجم: <code>{', '.join(str(x) for x in cfg.get('gb_options', DEFAULT_GB_OPTIONS))}</code>\n"
+            f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
+            f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
+            f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
+            f"{panel_info_line}\n"
+            "برای تغییر هر مورد روی دکمهٔ مربوطه بزنید:"
+        )
     kb_rows = [
         [{"text": "💵 قیمت هر گیگ", "callback_data": "adm_set:base_price_per_gb"}, {"text": "🎯 آستانه عمده", "callback_data": "adm_set:bulk_threshold_gb"}],
         [{"text": "📉 سود زیر آستانه (٪)", "callback_data": "adm_set:pct_under_threshold"}, {"text": "📈 سود بالای آستانه (٪)", "callback_data": "adm_set:pct_over_threshold"}],
@@ -2085,11 +2148,12 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == "/start" or t.startswith("/start ") or t == "/menu":
         user_states.pop(user_id, None)
-        mode = get_user_menu_mode(user_id)
+        mode = get_user_menu_mode(user_id, env)
+        demo_hdr = "🧪 <b>نسخه تست و نمایشی تبلیغاتی (Demo)</b>\n<i>ارقام به‌صورت تصادفی نمایش داده می‌شوند و پنل ادمین نیز برای تست باز است.</i>\n\n" if is_demo_mode(env) else ""
         send_message(
             token,
             chat_id,
-            "👋 <b>به ربات فروش اشتراک خوش آمدید!</b>\n\n"
+            f"{demo_hdr}👋 <b>به ربات فروش اشتراک خوش آمدید!</b>\n\n"
             "• خرید و تمدید فوری با حجم و مدت دلخواه\n"
             "• پرداخت کارت‌به‌کارت آنی و تتر خودکار (BEP20)\n"
             "• تست رایگان، کیف پول، معرفی دوستان و پشتیبانی\n\n"
@@ -2293,7 +2357,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         send_message(token, chat_id, "📊 نام کاربری اشتراک (مثلاً <code>u_a1b2c3d4</code>) را بفرستید:", env=env, user_id=user_id)
         return
 
-    if t == BTN_ADMIN and user_id in get_admin_ids(env):
+    if t == BTN_ADMIN and (user_id in get_admin_ids(env) or is_demo_mode(env)):
         user_states.pop(user_id, None)
         show_admin_panel(token, chat_id, env)
         return
@@ -2910,6 +2974,48 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         mapped = cmd_map.get(data)
         if mapped:
             handle_text(token, env, {"chat": {"id": chat_id}, "from": cb["from"], "text": mapped})
+        return
+
+    if is_demo_mode(env) and (data.startswith("adm_") or data == "menu_mode"):
+        if data == "adm_refresh":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🔄 ارقام رندوم بروزرسانی شد"})
+            show_admin_panel(token, chat_id, env, message_id=msg_id)
+            return
+        if data == "adm_nodes":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+            send_message(
+                token,
+                chat_id,
+                f"📡 <b>وضعیت سرورها (حالت تست رندوم)</b>\n\n"
+                f"🟢 آلمان-۱: آنلاین | پینگ <code>{random.randint(22, 45)}ms</code> | کاربر: <b>{random.randint(80, 210)}</b>\n"
+                f"🟢 هلند-۱: آنلاین | پینگ <code>{random.randint(28, 52)}ms</code> | کاربر: <b>{random.randint(60, 170)}</b>\n"
+                f"🟢 ترکیه-۱: آنلاین | پینگ <code>{random.randint(35, 65)}ms</code> | کاربر: <b>{random.randint(40, 130)}</b>",
+                env=env,
+                user_id=user_id,
+            )
+            return
+        if data == "adm_report_today":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+            send_message(
+                token,
+                chat_id,
+                f"📊 <b>گزارش فروش امروز (حالت تست رندوم)</b>\n\n"
+                f"👥 کاربران جدید: <b>{random.randint(15, 65)}</b> | 🎁 تست رایگان: <b>{random.randint(10, 40)}</b>\n"
+                f"🛒 خرید جدید: <b>{random.randint(12, 48)}</b> | 🔄 تمدید: <b>{random.randint(8, 30)}</b>\n"
+                f"💰 جمع فروش امروز: <b>{random.randint(4, 25) * 1000000:,} تومان</b>",
+                env=env,
+                user_id=user_id,
+            )
+            return
+        tg_api(
+            token,
+            "answerCallbackQuery",
+            {
+                "callback_query_id": cb_id,
+                "text": "🧪 این ربات در حالت تست و نمایشی است و تغییر این بخش غیرفعال می‌باشد.",
+                "show_alert": True,
+            },
+        )
         return
 
     if data == "buy_restart":
