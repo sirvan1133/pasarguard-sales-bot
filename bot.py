@@ -152,7 +152,7 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": BTN_CHECK}],
     ]
     if user_id in get_admin_ids(env):
-        rows.append([{"text": BTN_ADMIN}, {"text": BTN_MENU_MODE}])
+        rows.append([{"text": BTN_ADMIN}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
 
@@ -180,9 +180,7 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": res_lbl, "callback_data": "res_panel", "style": "danger"}],
     ]
     if user_id in get_admin_ids(env):
-        mode_lbl = {"both": "کیبورد + شیشه‌ای", "inline": "فقط شیشه‌ای", "keyboard": "فقط کیبوردی"}.get(get_user_menu_mode(user_id, env), "کیبورد + شیشه‌ای")
         rows.append([{"text": "👑 پنل ادمین", "callback_data": "adm_open", "style": "primary"}])
-        rows.append([{"text": f"🎛 حالت منو: {mode_lbl}", "callback_data": "menu_mode"}])
     return {"inline_keyboard": rows}
 
 
@@ -1555,7 +1553,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
         [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
         [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "📡 وضعیت سرورها", "callback_data": "adm_nodes"}],
-        [{"text": f"🎛 حالت منو: {get_user_menu_mode(0, env)}", "callback_data": "menu_mode"}],
+        [{"text": f"🎛 حالت منو: { {'both': 'کیبورد + شیشه‌ای', 'inline': 'فقط شیشه‌ای', 'keyboard': 'فقط کیبوردی'}.get(get_user_menu_mode(0, env), 'فقط شیشه‌ای') }", "callback_data": "menu_mode"}],
     ])
     if not tenant:
         kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}])
@@ -2821,13 +2819,12 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ این گزینه فقط برای ادمین است.", "show_alert": True})
             return
         cur = get_user_menu_mode(user_id, env)
-        nxt = {"both": "inline", "inline": "keyboard", "keyboard": "both"}.get(cur, "both")
+        nxt = {"both": "inline", "inline": "keyboard", "keyboard": "both"}.get(cur, "inline")
         set_user_menu_mode(user_id, nxt)
         lbl = {"both": "کیبورد + شیشه‌ای", "inline": "فقط شیشه‌ای", "keyboard": "فقط کیبوردی"}[nxt]
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"🎛 حالت منو: {lbl}"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
         send_message(token, chat_id, f"✅ حالت منوی ربات برای همه کاربران به <b>{lbl}</b> تغییر یافت.", env=env, user_id=user_id)
-        if nxt in ("both", "inline"):
-            send_message(token, chat_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
         return
 
     if data.startswith("home:") or data == "adm_open":
