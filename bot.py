@@ -129,7 +129,23 @@ def get_admin_ids(env: dict[str, str]) -> set[int]:
     return {int(x.strip()) for x in env.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 
 
+def get_user_menu_mode(user_id: int) -> str:
+    with users_file_lock(USERS_PATH):
+        return str(load_json(USERS_PATH).get(str(user_id), {}).get("menu_mode") or "both")
+
+
+def set_user_menu_mode(user_id: int, mode: str) -> None:
+    uid = str(user_id)
+    with users_file_lock(USERS_PATH):
+        users = load_json(USERS_PATH)
+        u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
+        u["menu_mode"] = mode
+        save_json(USERS_PATH, users)
+
+
 def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
+    if get_user_menu_mode(user_id) == "inline":
+        return {"remove_keyboard": True}
     rows = [
         [{"text": BTN_BUY}],
         [{"text": BTN_RENEW}, {"text": BTN_MY_SUBS}],
@@ -169,6 +185,8 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
     ]
     if user_id in get_admin_ids(env):
         rows.append([{"text": "👑 پنل ادمین", "callback_data": "adm_open", "style": "primary"}])
+    mode_lbl = {"both": "کیبورد + شیشه‌ای", "inline": "فقط شیشه‌ای", "keyboard": "فقط کیبوردی"}.get(get_user_menu_mode(user_id), "کیبورد + شیشه‌ای")
+    rows.append([{"text": f"🎛 حالت منو: {mode_lbl}", "callback_data": "menu_mode"}])
     return {"inline_keyboard": rows}
 
 
@@ -2030,8 +2048,9 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         )
         return
 
-    if t == "/start" or t.startswith("/start "):
+    if t == "/start" or t.startswith("/start ") or t == "/menu":
         user_states.pop(user_id, None)
+        mode = get_user_menu_mode(user_id)
         send_message(
             token,
             chat_id,
@@ -2041,12 +2060,13 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             env=env,
             user_id=user_id,
         )
-        send_message(
-            token,
-            chat_id,
-            "📌 <b>منوی دسترسی سریع:</b>",
-            reply_markup=build_home_inline_keyboard(user_id, env),
-        )
+        if mode in ("both", "inline"):
+            send_message(
+                token,
+                chat_id,
+                "📌 <b>منوی دسترسی سریع:</b>",
+                reply_markup=build_home_inline_keyboard(user_id, env),
+            )
         return
 
     if t == BTN_TRIAL or t == "/trial":
@@ -2772,6 +2792,17 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             txt_b = f"حساب شما تا {max(1, (rem + 3599)//3600)} ساعت دیگر مسدود است" if rem > 0 else "حساب شما توسط مدیریت مسدود است"
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": txt_b, "show_alert": True})
             return
+
+    if data == "menu_mode":
+        cur = get_user_menu_mode(user_id)
+        nxt = {"both": "inline", "inline": "keyboard", "keyboard": "both"}.get(cur, "both")
+        set_user_menu_mode(user_id, nxt)
+        lbl = {"both": "کیبورد + شیشه‌ای", "inline": "فقط شیشه‌ای", "keyboard": "فقط کیبوردی"}[nxt]
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"🎛 حالت منو: {lbl}"})
+        send_message(token, chat_id, f"✅ حالت منوی شما به <b>{lbl}</b> تغییر یافت.\n(هر زمان با <code>/menu</code> می‌توانید تغییر دهید)", env=env, user_id=user_id)
+        if nxt in ("both", "inline"):
+            send_message(token, chat_id, "📌 <b>منوی دسترسی سریع:</b>", reply_markup=build_home_inline_keyboard(user_id, env))
+        return
 
     if data.startswith("home:") or data == "adm_open":
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -4318,6 +4349,7 @@ def main() -> None:
             {
                 "commands": [
                     {"command": "start", "description": "شروع و منوی اصلی"},
+                    {"command": "menu", "description": "منوی سریع و تغییر حالت منو"},
                     {"command": "buy", "description": "خرید اشتراک جدید"},
                     {"command": "renew", "description": "تمدید اشتراک با تخفیف"},
                     {"command": "trial", "description": "دریافت تست رایگان"},
