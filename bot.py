@@ -767,7 +767,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
-        f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه: <code>{cfg['group_id']}</code>)\n\n"
+        f"• پنل: <code>{html.escape(str(cfg['panel_url']))}</code> (یوزر: <code>{html.escape(str(cfg['panel_user']))}</code> | گروه پنل: <code>{cfg['group_id']}</code>)\n"
+        "💡 <i>آیدی گروه پنل مشخص می‌کند کاربران جدید عضو کدام گروه PasarGuard شوند (در پنل‌های تک‌گروهه همان 1 است).</i>\n\n"
         "برای تغییر هر مورد روی دکمهٔ مربوطه بزنید:"
     )
     kb = {
