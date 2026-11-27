@@ -2825,8 +2825,8 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال دانلود آپدیت..."})
         try:
-            url = "https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/main/bot.py"
-            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.5.0"})
+            url = f"https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/main/bot.py?t={int(time.time())}"
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/8.5.0", "Cache-Control": "no-cache"})
             new_code = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
             cur_path = Path(__file__).resolve()
             tmp_path = cur_path.with_suffix(".py.new")
