@@ -204,6 +204,9 @@ def get_settings(env: dict[str, str]) -> dict:
         "reseller_min_gb": 500,
         "reseller_max_gb_per_acc": 200,
         "gb_options": list(DEFAULT_GB_OPTIONS),
+        "maintenance_mode": False,
+        "maintenance_msg": "🛠 ربات در حال بروزرسانی و نگهداری سرورهاست. لطفاً دقایقی دیگر دوباره تلاش کنید.",
+        "pending_alert_minutes": 30,
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -779,6 +782,14 @@ def send_connection_guide(token: str, chat_id: int, env: dict[str, str], user_id
     send_message(token, chat_id, txt, env=env, user_id=user_id)
 
 
+def check_maintenance(token: str, env: dict[str, str], chat_id: int, user_id: int) -> bool:
+    cfg = get_settings(env)
+    if not cfg.get("maintenance_mode") or user_id in get_admin_ids(env):
+        return True
+    send_message(token, chat_id, str(cfg.get("maintenance_msg") or "🛠 در حال تعمیر هستیم."), env=env, user_id=user_id)
+    return False
+
+
 def check_force_join(token: str, env: dict[str, str], chat_id: int, user_id: int) -> bool:
     cfg = get_settings(env)
     if not cfg.get("force_join_enabled") or user_id in get_admin_ids(env):
@@ -921,6 +932,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     fj_s = f"فعال ({cfg['force_join_channel']})" if cfg.get("force_join_enabled") else "غیرفعال"
     cm_map = {"all": "فوری برای همه + بررسی بعدی", "trusted": "فوری فقط مشتریان قدیمی", "off": "تایید دستی"}
     cm_s = cm_map.get(str(cfg.get("card_instant_mode", "all")), "فوری برای همه + بررسی بعدی")
+    maint_s = "🔴 فعال (فروش متوقف)" if cfg.get("maintenance_mode") else "🟢 غیرفعال"
     txt = (
         "👑 <b>پنل مدیریت ربات فروش</b>\n\n"
         f"👥 کل کاربران: <b>{len(users)}</b> | 🎟 کدهای تخفیف: <b>{len(coupons)}</b>\n"
@@ -933,7 +945,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• تخفیف تمدید: <code>{cfg['renew_discount_pct']}٪</code> | کمپین همگانی: <code>{cfg['global_discount_pct']}٪</code> | رفرال: <code>{cfg['referral_reward_pct']}٪</code>\n"
         f"• تست رایگان: <code>{trial_s}</code>\n"
         f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
-        f"• حالت کارت‌به‌کارت: <code>{cm_s}</code>\n"
+        f"• حالت کارت‌به‌کارت: <code>{cm_s}</code> | حالت تعمیر: <code>{maint_s}</code> | هشدار معوق: <code>{cfg['pending_alert_minutes']}m</code>\n"
         f"• نمایندگی: هر گیگ <code>{int(cfg['reseller_price_per_gb']):,}</code> ت | کف <code>{cfg['reseller_min_gb']}</code> GB | سقف تک‌اکانت <code>{cfg['reseller_max_gb_per_acc']}</code> GB\n"
         f"• بسته‌های حجم: <code>{', '.join(str(x) for x in cfg.get('gb_options', DEFAULT_GB_OPTIONS))}</code>\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
@@ -963,7 +975,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
             [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
             [{"text": "📦 بسته‌های حجم پیش‌فرض", "callback_data": "adm_set:gb_options"}, {"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}],
-            [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
+            [{"text": "🛠 روشن/خاموش تعمیر", "callback_data": "adm_toggle_maint"}, {"text": "📝 متن پیام تعمیر", "callback_data": "adm_set:maintenance_msg"}],
+            [{"text": "⏰ هشدار سفارش معوق", "callback_data": "adm_set:pending_alert_minutes"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
         ]
     }
     if message_id is not None:
@@ -1393,7 +1406,11 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
     if t == BTN_WALLET or t == "/wallet":
         user_states.pop(user_id, None)
         bal = get_wallet_balance(user_id)
-        kb = {"inline_keyboard": [[{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}]]}
+        kb = {
+            "inline_keyboard": [
+                [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}, {"text": "💸 انتقال موجودی", "callback_data": "wallet_transfer"}],
+            ]
+        }
         send_message(
             token,
             chat_id,
@@ -1437,6 +1454,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_TRIAL or t == "/trial":
         user_states.pop(user_id, None)
+        if not check_maintenance(token, env, chat_id, user_id):
+            return
         if not check_force_join(token, env, chat_id, user_id):
             return
         cfg = get_settings(env)
@@ -1531,6 +1550,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_BUY or t == "/buy":
         user_states.pop(user_id, None)
+        if not check_maintenance(token, env, chat_id, user_id):
+            return
         if not check_force_join(token, env, chat_id, user_id):
             return
         send_message(token, chat_id, "📦 <b>مرحله ۱:</b> حجم مورد نظر (به گیگابایت) را انتخاب کنید:", reply_markup=build_gb_keyboard("buy"))
@@ -1538,6 +1559,8 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
 
     if t == BTN_RENEW or t == "/renew":
         user_states.pop(user_id, None)
+        if not check_maintenance(token, env, chat_id, user_id):
+            return
         if not check_force_join(token, env, chat_id, user_id):
             return
         cfg = get_settings(env)
@@ -1705,6 +1728,29 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 f"👛 <b>فاکتور شارژ کیف پول</b>\n\n💵 مبلغ: <b>{amt:,} تومان</b> (<code>{usdt_amt} USDT</code>)\nروش پرداخت را انتخاب کنید:",
                 reply_markup=kb,
             )
+            return
+
+        if step == "await_wallet_transfer":
+            parts = t.split()
+            if len(parts) != 2 or not parts[0].isdigit() or not parts[1].replace(",", "").isdigit():
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 50000</code> (دوباره بفرستید):", env=env, user_id=user_id)
+                return
+            t_uid = int(parts[0])
+            amt = int(parts[1].replace(",", ""))
+            if t_uid == user_id or amt < 10000:
+                send_message(token, chat_id, "❌ آیدی مقصد نباید خودتان باشد و حداقل مبلغ انتقال <b>۱۰,۰۰۰ تومان</b> است. دوباره بفرستید:", env=env, user_id=user_id)
+                return
+            ok_bal, new_bal = adjust_wallet_balance(user_id, -amt)
+            if not ok_bal:
+                send_message(token, chat_id, f"❌ موجودی کیف پول کافی نیست (موجودی: <b>{new_bal:,} تومان</b>). مبلغ دیگری بفرستید:", env=env, user_id=user_id)
+                return
+            user_states.pop(user_id, None)
+            _, rec_bal = adjust_wallet_balance(t_uid, amt)
+            send_message(token, chat_id, f"✅ مبلغ <b>{amt:,} تومان</b> به کاربر <code>{t_uid}</code> منتقل شد.\n👛 موجودی فعلی شما: <b>{new_bal:,} تومان</b>", env=env, user_id=user_id)
+            try:
+                send_message(token, t_uid, f"💸 مبلغ <b>{amt:,} تومان</b> از طرف کاربر <code>{user_id}</code> به کیف پول شما منتقل شد.\n👛 موجودی فعلی: <b>{rec_bal:,} تومان</b>", env=env, user_id=t_uid)
+            except Exception:
+                pass
             return
 
         if step == "await_support":
@@ -1985,7 +2031,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             user_states.pop(user_id, None)
             key = st["key"]
             try:
-                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders", "reseller_price_per_gb", "reseller_min_gb"):
+                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders", "reseller_price_per_gb", "reseller_min_gb", "pending_alert_minutes"):
                     val = int(t.replace(",", "").strip())
                     if val <= 0:
                         raise ValueError("باید مثبت باشد")
@@ -2174,6 +2220,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if not get_reseller(user_id):
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "دسترسی نمایندگی ندارید", "show_alert": True})
             return
+        if not check_maintenance(token, env, chat_id, user_id):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+            return
         renew_u = data.split(":", 1)[1] if data.startswith("res_renew:") else ""
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         cfg = get_settings(env)
@@ -2288,6 +2337,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
     if data == "res_bulk":
         if not get_reseller(user_id):
             return
+        if not check_maintenance(token, env, chat_id, user_id):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+            return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
         user_states[user_id] = {"step": "await_res_bulk"}
         send_message(token, chat_id, "📦 تعداد، حجم و مدت را با فاصله بفرستید:\n<code>COUNT GB MONTHS</code>\nمثال: <code>5 30 1</code> (۵ اکانت ۳۰ گیگ ۱ ماهه)", env=env, user_id=user_id)
@@ -2361,6 +2413,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
                 "inline_keyboard": [
                     [{"text": "📊 وضعیت", "callback_data": f"sub_status:{un}"}, {"text": "🔄 تمدید", "callback_data": f"res_renew:{un}"}],
                     [{"text": "🔑 تغییر ساب", "callback_data": f"sub_revoke:{un}"}, {"text": "⏸ قطع/وصل", "callback_data": f"res_toggle:{un}"}],
+                    [{"text": "🗑 حذف و برگشت مبلغ", "callback_data": f"res_del:{un}"}],
                 ]
             }
             send_message(token, chat_id, f"🆔 <code>{html.escape(un)}</code> ({o['gb']}GB / {o['months']} ماه)\n<code>{html.escape(o.get('sub_url', ''))}</code>", reply_markup=kb)
@@ -2384,6 +2437,77 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         except Exception as e:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "خطا", "show_alert": True})
             send_message(token, chat_id, f"❌ خطا: {html.escape(str(e))}", env=env, user_id=user_id)
+        return
+
+    if data.startswith("res_del:"):
+        if not get_reseller(user_id):
+            return
+        un = data.split(":", 1)[1]
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        kb = {
+            "inline_keyboard": [[
+                {"text": "✅ بله، حذف و برگشت مبلغ", "callback_data": f"res_del_yes:{un}"},
+                {"text": "❌ انصراف", "callback_data": "res_list"},
+            ]]
+        }
+        send_message(
+            token,
+            chat_id,
+            f"⚠️ آیا از حذف اکانت <code>{html.escape(un)}</code> مطمئن هستید؟\n<i>(فقط در صورتی که کمتر از ۵٪ مصرف شده باشد قابل حذف و برگشت وجه است)</i>",
+            reply_markup=kb,
+        )
+        return
+
+    if data.startswith("res_del_yes:"):
+        if not get_reseller(user_id):
+            return
+        un = data.split(":", 1)[1]
+        with orders_lock:
+            orders = load_json(ORDERS_PATH)
+            matched = [
+                (oid, o) for oid, o in orders.items()
+                if o.get("user_id") == user_id and o.get("panel_username") == un and o.get("status") == "approved" and o.get("type", "").startswith("reseller_")
+            ]
+        if not matched:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "اکانت یافت نشد یا قبلاً حذف شده", "show_alert": True})
+            return
+        try:
+            pu = panel_request(env, f"/api/user/{urllib.parse.quote(un)}")
+            used = int(pu.get("used_traffic") or 0)
+            lim = int(pu.get("data_limit") or 1)
+            if used > max(50 * 1024 * 1024, int(lim * 0.05)):
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "بیش از ۵٪ حجم مصرف شده و قابل برگشت نیست", "show_alert": True})
+                return
+            panel_request(env, f"/api/user/{urllib.parse.quote(un)}", method="DELETE")
+        except Exception as e:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "خطا در حذف از پنل", "show_alert": True})
+            send_message(token, chat_id, f"❌ خطا در حذف اکانت: {html.escape(str(e))}", env=env, user_id=user_id)
+            return
+
+        refund_amt = sum(int(o.get("total_toman") or 0) for _, o in matched)
+        refund_gb = sum(int(o.get("gb") or 0) for _, o in matched)
+        with orders_lock:
+            orders = load_json(ORDERS_PATH)
+            for oid, _ in matched:
+                if oid in orders:
+                    orders[oid]["status"] = "refunded"
+            save_json(ORDERS_PATH, orders)
+        _, new_bal = adjust_wallet_balance(user_id, refund_amt)
+        record_reseller_sale(user_id, -refund_gb, count=-1)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ حذف و برگشت وجه انجام شد"})
+        edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(un)}</code> حذف شد و مبلغ <b>{refund_amt:,} تومان</b> به کیف پول شما برگشت.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>")
+        return
+
+    if data == "wallet_transfer":
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_wallet_transfer"}
+        send_message(
+            token,
+            chat_id,
+            "💸 آیدی عددی تلگرام مقصد و مبلغ (به تومان) را بفرستید:\n<code>USER_ID AMOUNT</code>\nمثال: <code>123456789 50000</code>",
+            env=env,
+            user_id=user_id,
+        )
         return
 
     if data == "check_join":
@@ -2780,6 +2904,15 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             pass
         return
 
+    if data == "adm_toggle_maint":
+        if user_id not in get_admin_ids(env):
+            return
+        cur = bool(get_settings(env).get("maintenance_mode", False))
+        update_setting(env, "maintenance_mode", not cur)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ حالت تعمیر تغییر یافت"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
     if data == "adm_toggle_force_join":
         if user_id not in get_admin_ids(env):
             return
@@ -2994,6 +3127,8 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "reseller_min_gb": "حداقل گیگ شرط دریافت نمایندگی (مثلاً 500)",
             "reseller_max_gb_per_acc": "حداکثر حجم هر تک‌اکانت نماینده به گیگ (0 = نامحدود)",
             "gb_options": "لیست حجم‌های پیش‌فرض را با کاما یا فاصله بفرستید (مثلاً: 20,30,50,100,200,400,1000)",
+            "maintenance_msg": "متن پیام نمایش‌داده‌شده در حالت تعمیر و نگهداری",
+            "pending_alert_minutes": "یادآوری سفارش معوق بعد از چند دقیقه به ادمین ارسال شود (مثلاً 30)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -3146,6 +3281,42 @@ def backup_and_report_loop(token: str, env: dict[str, str]) -> None:
                 if send_backup_zip(token, env) > 0:
                     meta["last_backup_ts"] = now_ts
                     save_json(META_PATH, meta)
+
+            # Alert admins about pending orders older than pending_alert_minutes
+            alert_min = int(get_settings(env).get("pending_alert_minutes", 30))
+            if alert_min > 0:
+                to_alert = []
+                with orders_lock:
+                    orders = load_json(ORDERS_PATH)
+                    changed_o = False
+                    for oid, o in orders.items():
+                        if o.get("status") == "pending" and not o.get("pending_alerted"):
+                            age_min = (now_ts - int(o.get("created_at") or now_ts)) // 60
+                            if age_min >= alert_min:
+                                o["pending_alerted"] = True
+                                changed_o = True
+                                to_alert.append((oid, o, age_min))
+                    if changed_o:
+                        save_json(ORDERS_PATH, orders)
+                for oid, o, age_min in to_alert:
+                    kb = {
+                        "inline_keyboard": [[
+                            {"text": "✅ تایید و ساخت خودکار", "callback_data": f"adm_ok:{oid}"},
+                            {"text": "❌ رد سفارش", "callback_data": f"adm_no:{oid}"},
+                        ]]
+                    }
+                    for adm_id in get_admin_ids(env):
+                        try:
+                            send_message(
+                                token,
+                                adm_id,
+                                f"⏰ <b>یادآوری سفارش معوق #{oid}</b>\n\n"
+                                f"⏳ حدود <b>{age_min} دقیقه</b> است در انتظار بررسی مانده!\n"
+                                f"👤 کاربر: <code>{o['user_id']}</code> | مبلغ: <b>{int(o.get('total_toman', 0)):,} تومان</b>",
+                                reply_markup=kb,
+                            )
+                        except Exception:
+                            pass
         except Exception as e:
             log.warning("Backup/report loop error: %s", e)
         time.sleep(600)
