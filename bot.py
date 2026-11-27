@@ -839,8 +839,26 @@ def get_upstream_balance(env: dict[str, str]) -> int | None:
 
 
 def get_sales_wallet_balance(user_id: int) -> int:
+    uid = str(user_id)
     with users_file_lock(USERS_PATH):
-        return int(load_json(USERS_PATH).get(str(user_id), {}).get("sales_balance_toman", 0))
+        users = load_json(USERS_PATH)
+        u = users.get(uid, {})
+        if "sales_balance_toman" in u:
+            return int(u["sales_balance_toman"])
+        # Backfill from existing approved orders if not initialized yet
+        orders = load_json(ORDERS_PATH)
+        total = sum(
+            int(o.get("total_toman") or 0)
+            for o in orders.values()
+            if o.get("status") == "approved"
+            and str(o.get("user_id")) != uid
+            and (o.get("type") == "topup" or o.get("pay_method") in ("card", "usdt"))
+        )
+        if total > 0:
+            u = users.setdefault(uid, {"first_seen": int(time.time()), "last_seen": int(time.time()), "username": ""})
+            u["sales_balance_toman"] = total
+            save_json(USERS_PATH, users)
+        return total
 
 
 def add_sales_wallet_balance(owner_uid: int, delta: int, note: str = "") -> int:
@@ -3490,6 +3508,8 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         action_note = ""
         if order.get("type") == "topup":
             _, rem_b = adjust_wallet_balance_at(USERS_PATH, target_uid, -int(order["total_toman"]), note=f"کسر شارژ جعلی #{order_id}", allow_grace=True)
+            if is_tenant_bot(env) and env.get("TENANT_OWNER_ID") and str(target_uid) != str(env["TENANT_OWNER_ID"]):
+                add_sales_wallet_balance(int(env["TENANT_OWNER_ID"]), -int(order["total_toman"]), note=f"کسر فیش جعلی #{order_id}")
             disabled_cnt = 0
             with orders_lock:
                 recent_subs = [
