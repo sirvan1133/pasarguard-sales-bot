@@ -4597,17 +4597,15 @@ def main() -> None:
     except Exception as e:
         log.warning("setMyCommands failed: %s", e)
 
-    miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
-    if miniapp_url and not is_tenant_bot(env):
-        try:
-            tg_api(
-                token,
-                "setChatMenuButton",
-                {"menu_button": {"type": "web_app", "text": "🚀 پنل کاربری", "web_app": {"url": miniapp_url}}},
-                timeout=10,
-            )
-        except Exception as e:
-            log.warning("setChatMenuButton failed: %s", e)
+    try:
+        tg_api(
+            token,
+            "setChatMenuButton",
+            {"menu_button": {"type": "commands"}},
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning("setChatMenuButton failed: %s", e)
 
     threading.Thread(target=expiry_reminder_loop, args=(token, env), daemon=True).start()
     threading.Thread(target=backup_and_report_loop, args=(token, env), daemon=True).start()
