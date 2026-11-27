@@ -35,6 +35,7 @@ COUPONS_PATH = BASE_DIR / "coupons.json"
 INVOICES_PATH = BASE_DIR / "invoices.json"
 REMINDERS_PATH = BASE_DIR / "reminders.json"
 META_PATH = BASE_DIR / "meta.json"
+RESELLERS_PATH = BASE_DIR / "resellers.json"
 
 DEFAULT_GB_OPTIONS = [20, 30, 50, 100, 200, 400, 1000]
 DEFAULT_MONTH_OPTIONS = [1, 2, 3, 6, 12]
@@ -51,6 +52,7 @@ orders_lock = threading.Lock()
 settings_lock = threading.Lock()
 users_lock = threading.Lock()
 coupons_lock = threading.Lock()
+resellers_lock = threading.Lock()
 rate_lock = threading.Lock()
 rate_cache: dict = {"ts": 0.0, "rate": 0}
 panel_lock = threading.Lock()
@@ -67,6 +69,7 @@ BTN_PRICES = "💰 تعرفه و قیمت روز"
 BTN_CHECK = "📊 استعلام اشتراک"
 BTN_REFERRAL = "🤝 دعوت دوستان"
 BTN_SUPPORT = "👨‍💻 پشتیبانی"
+BTN_RESELLER = "🤝 پنل نمایندگی"
 BTN_HELP = "❓ راهنما"
 BTN_ADMIN = "👑 پنل ادمین"
 
@@ -93,7 +96,8 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
         [{"text": BTN_TRIAL}, {"text": BTN_MY_SUBS}],
         [{"text": BTN_WALLET}, {"text": BTN_CHECK}],
         [{"text": BTN_PRICES}, {"text": BTN_REFERRAL}],
-        [{"text": BTN_SUPPORT}, {"text": BTN_HELP}],
+        [{"text": BTN_RESELLER}, {"text": BTN_SUPPORT}],
+        [{"text": BTN_HELP}],
     ]
     if user_id in get_admin_ids(env):
         rows.append([{"text": BTN_ADMIN}])
@@ -196,6 +200,9 @@ def get_settings(env: dict[str, str]) -> dict:
         "force_join_channel": "",
         "max_pending_orders": 2,
         "card_instant_mode": "all",
+        "reseller_price_per_gb": 5000,
+        "reseller_min_gb": 500,
+        "reseller_max_gb_per_acc": 200,
         "card_number": env.get("CARD_NUMBER", "0000000000000000"),
         "card_owner": env.get("CARD_OWNER", "نام صاحب کارت"),
         "usdt_bep20": env.get("USDT_BEP20", "0x0000000000000000000000000000000000000000"),
@@ -664,6 +671,100 @@ def adjust_wallet_balance(user_id: int, delta: int) -> tuple[bool, int]:
         return True, new_bal
 
 
+def get_reseller(user_id: int) -> dict | None:
+    with resellers_lock:
+        rec = load_json(RESELLERS_PATH).get(str(user_id))
+        return rec if (rec and rec.get("active")) else None
+
+
+def set_reseller(user_id: int, active: bool = True, price_per_gb: int | None = None) -> dict:
+    uid = str(user_id)
+    with resellers_lock:
+        data = load_json(RESELLERS_PATH)
+        rec = data.get(uid, {
+            "user_id": user_id,
+            "total_gb_sold": 0,
+            "accounts_created": 0,
+            "created_at": int(time.time()),
+        })
+        rec["active"] = active
+        if price_per_gb is not None:
+            rec["price_per_gb"] = int(price_per_gb)
+        data[uid] = rec
+        save_json(RESELLERS_PATH, data)
+        return rec
+
+
+def record_reseller_sale(user_id: int, gb: int, count: int = 1) -> None:
+    uid = str(user_id)
+    with resellers_lock:
+        data = load_json(RESELLERS_PATH)
+        if uid in data:
+            data[uid]["total_gb_sold"] = int(data[uid].get("total_gb_sold", 0)) + int(gb)
+            data[uid]["accounts_created"] = int(data[uid].get("accounts_created", 0)) + int(count)
+            save_json(RESELLERS_PATH, data)
+
+
+def get_reseller_price_per_gb(user_id: int, env: dict[str, str]) -> int:
+    cfg = get_settings(env)
+    rec = get_reseller(user_id)
+    if rec and rec.get("price_per_gb"):
+        return int(rec["price_per_gb"])
+    return int(cfg.get("reseller_price_per_gb", 5000))
+
+
+def show_reseller_panel(token: str, chat_id: int, env: dict[str, str], user_id: int, message_id: int | None = None) -> None:
+    cfg = get_settings(env)
+    rec = get_reseller(user_id)
+    if not rec:
+        min_gb = int(cfg.get("reseller_min_gb", 500))
+        ppg = int(cfg.get("reseller_price_per_gb", 5000))
+        min_tmn = min_gb * ppg
+        bal = get_wallet_balance(user_id)
+        txt = (
+            "🤝 <b>درخواست پنل نمایندگی</b>\n\n"
+            "شما هنوز نماینده نیستید. شرایط دریافت پنل نمایندگی:\n"
+            f"• تعرفهٔ ثابت نماینده: <b>{ppg:,} تومان</b> به ازای هر گیگ (بدون افزایش ماهانه)\n"
+            f"• حداقل شارژ/خرید اولیه: <b>{min_gb:,} گیگ</b> (معادل <b>{min_tmn:,} تومان</b>)\n"
+            f"• موجودی فعلی کیف پول شما: <b>{bal:,} تومان</b>\n\n"
+            "پس از شارژ کیف پول یا برای بررسی مدیریت، دکمهٔ زیر را بزنید:"
+        )
+        kb = {
+            "inline_keyboard": [
+                [{"text": "➕ شارژ کیف پول", "callback_data": "wallet_topup"}],
+                [{"text": "📩 ارسال درخواست نمایندگی به ادمین", "callback_data": "reseller_apply"}],
+            ]
+        }
+        if message_id is not None:
+            edit_message(token, chat_id, message_id, txt, reply_markup=kb)
+        else:
+            send_message(token, chat_id, txt, reply_markup=kb)
+        return
+
+    ppg = get_reseller_price_per_gb(user_id, env)
+    bal = get_wallet_balance(user_id)
+    est_gb = bal // ppg if ppg > 0 else 0
+    max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
+    cap_s = f"{max_acc} گیگ" if max_acc > 0 else "نامحدود"
+    txt = (
+        "🤝 <b>پنل نمایندگی شما</b>\n\n"
+        f"💵 تعرفهٔ ثابت شما: <b>{ppg:,} تومان / گیگ</b>\n"
+        f"👛 موجودی کیف پول: <b>{bal:,} تومان</b> (معادل ~<b>{est_gb:,} GB</b>)\n"
+        f"📦 سقف حجم هر اکانت: <b>{cap_s}</b>\n"
+        f"📊 اکانت‌های ساخته‌شده: <b>{int(rec.get('accounts_created', 0))}</b> | کل فروش: <b>{int(rec.get('total_gb_sold', 0)):,} GB</b>"
+    )
+    kb = {
+        "inline_keyboard": [
+            [{"text": "➕ ساخت اکانت جدید", "callback_data": "res_create"}, {"text": "📦 ساخت گروهی (Bulk)", "callback_data": "res_bulk"}],
+            [{"text": "📋 اکانت‌های من (نمایندگی)", "callback_data": "res_list"}, {"text": "👛 شارژ کیف پول", "callback_data": "wallet_topup"}],
+        ]
+    }
+    if message_id is not None:
+        edit_message(token, chat_id, message_id, txt, reply_markup=kb)
+    else:
+        send_message(token, chat_id, txt, reply_markup=kb)
+
+
 def send_connection_guide(token: str, chat_id: int, env: dict[str, str], user_id: int) -> None:
     txt = (
         "📱 <b>راهنمای سریع اتصال</b>\n\n"
@@ -710,7 +811,7 @@ def check_force_join(token: str, env: dict[str, str], chat_id: int, user_id: int
 
 
 def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = None) -> int:
-    files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH]
+    files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH]
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_path = Path(tmp.name)
     sent = 0
@@ -831,6 +932,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         f"• تست رایگان: <code>{trial_s}</code>\n"
         f"• قفل کانال: <code>{html.escape(fj_s)}</code> | سقف سفارش در انتظار: <code>{cfg['max_pending_orders']}</code>\n"
         f"• حالت کارت‌به‌کارت: <code>{cm_s}</code>\n"
+        f"• نمایندگی: هر گیگ <code>{int(cfg['reseller_price_per_gb']):,}</code> ت | کف <code>{cfg['reseller_min_gb']}</code> GB | سقف تک‌اکانت <code>{cfg['reseller_max_gb_per_acc']}</code> GB\n"
         f"• یادآور تمدید: <code>{cfg['reminder_days']} روز</code> مانده یا زیر <code>{cfg['reminder_pct']}٪</code> حجم\n"
         f"• کارت: <code>{html.escape(str(cfg['card_number']))}</code> ({html.escape(str(cfg['card_owner']))})\n"
         f"• تتر BEP20: <code>{html.escape(str(cfg['usdt_bep20']))}</code>\n"
@@ -853,6 +955,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
             [{"text": "🌐 آدرس پنل", "callback_data": "adm_set:panel_url"}, {"text": "👤 یوزر پنل", "callback_data": "adm_set:panel_user"}],
             [{"text": "🔑 رمز پنل", "callback_data": "adm_set:panel_pass"}, {"text": "👥 آیدی گروه پنل", "callback_data": "adm_set:group_id"}],
             [{"text": "🔍 مدیریت کاربر", "callback_data": "adm_find_user"}, {"text": "👛 شارژ دستی کیف‌پول", "callback_data": "adm_wallet"}],
+            [{"text": "🤝 مدیریت نمایندگان", "callback_data": "adm_resellers"}, {"text": "💵 قیمت گیگ نماینده", "callback_data": "adm_set:reseller_price_per_gb"}],
+            [{"text": "📦 حداقل گیگ نمایندگی", "callback_data": "adm_set:reseller_min_gb"}, {"text": "🎯 سقف گیگ اکانت نماینده", "callback_data": "adm_set:reseller_max_gb_per_acc"}],
             [{"text": "📢 پیام همگانی", "callback_data": "adm_broadcast"}, {"text": "📊 گزارش امروز", "callback_data": "adm_report_today"}],
             [{"text": "🗄 بکاپ فوری", "callback_data": "adm_backup"}, {"text": "🔄 آپدیت ربات از گیت‌هاب", "callback_data": "adm_update_bot"}],
             [{"text": "⚡ حالت کارت‌به‌کارت", "callback_data": "adm_cycle_card_mode"}, {"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}],
@@ -1294,6 +1398,11 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             "با شارژ کیف پول می‌توانید بدون نیاز به تایید دوباره، خرید و تمدید را به‌صورت <b>آنی</b> انجام دهید.",
             reply_markup=kb,
         )
+        return
+
+    if t == BTN_RESELLER or t == "/reseller":
+        user_states.pop(user_id, None)
+        show_reseller_panel(token, chat_id, env, user_id)
         return
 
     if t == BTN_SUPPORT or t == "/support":
@@ -1748,14 +1857,124 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             send_message(token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows} if kb_rows else None, env=env, user_id=user_id)
             return
 
+        if step == "await_res_bulk":
+            user_states.pop(user_id, None)
+            if not get_reseller(user_id):
+                return
+            parts = t.split()
+            if len(parts) != 3 or not all(p.isdigit() for p in parts):
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>COUNT GB MONTHS</code>\nمثال: <code>5 30 1</code> (۵ اکانت ۳۰ گیگ ۱ ماهه)", env=env, user_id=user_id)
+                return
+            cnt, gb, months = int(parts[0]), int(parts[1]), int(parts[2])
+            cfg = get_settings(env)
+            max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
+            if cnt < 1 or cnt > 30 or gb < 1 or months < 1 or months > 36:
+                send_message(token, chat_id, "❌ تعداد بین ۱ تا ۳۰، حجم از ۱ گیگ و مدت بین ۱ تا ۳۶ ماه مجاز است.", env=env, user_id=user_id)
+                return
+            if max_acc > 0 and gb > max_acc:
+                send_message(token, chat_id, f"❌ حداکثر حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است.", env=env, user_id=user_id)
+                return
+            ppg = get_reseller_price_per_gb(user_id, env)
+            cost = cnt * gb * ppg
+            bal = get_wallet_balance(user_id)
+            if bal < cost:
+                send_message(token, chat_id, f"❌ موجودی کیف پول کافی نیست.\nمبلغ: <b>{cost:,} تومان</b> | موجودی: <b>{bal:,} تومان</b>", env=env, user_id=user_id)
+                return
+            inv_id = save_invoice({"res_bulk": True, "cnt": cnt, "gb": gb, "months": months, "cost": cost})
+            kb = {"inline_keyboard": [[{"text": f"✅ تایید و ساخت {cnt} اکانت ({cost:,} ت)", "callback_data": f"res_do_bulk:{inv_id}"}]]}
+            send_message(
+                token,
+                chat_id,
+                f"📦 <b>پیش‌نمایش ساخت گروهی نماینده</b>\n\n"
+                f"• تعداد: <b>{cnt} اکانت</b>\n"
+                f"• هر اکانت: <b>{gb} گیگ / {months} ماه</b>\n"
+                f"• هزینهٔ کل ({ppg:,} ت/گیگ): <b>{cost:,} تومان</b>\n"
+                f"• موجودی فعلی: <b>{bal:,} تومان</b>",
+                reply_markup=kb,
+            )
+            return
+
+        if step == "await_res_username":
+            user_states.pop(user_id, None)
+            if not get_reseller(user_id):
+                return
+            gb = int(st["gb"])
+            months = int(st["months"])
+            custom_u = "" if t in ("-", "خودکار", "auto") else re.sub(r"[^A-Za-z0-9_]", "", t.strip())
+            if t not in ("-", "خودکار", "auto") and len(custom_u) < 3:
+                send_message(token, chat_id, "❌ نام کاربری باید حداقل ۳ کاراکتر انگلیسی/عدد باشد (یا <code>-</code> بفرستید):", env=env, user_id=user_id)
+                user_states[user_id] = st
+                return
+            ppg = get_reseller_price_per_gb(user_id, env)
+            cost = gb * ppg
+            bal = get_wallet_balance(user_id)
+            if bal < cost:
+                send_message(token, chat_id, f"❌ موجودی کیف پول کافی نیست.\nمبلغ: <b>{cost:,} تومان</b> | موجودی: <b>{bal:,} تومان</b>", env=env, user_id=user_id)
+                return
+            inv_id = save_invoice({"res_single": True, "gb": gb, "months": months, "custom_u": custom_u, "cost": cost})
+            u_label = custom_u if custom_u else "تولید خودکار"
+            kb = {"inline_keyboard": [[{"text": f"✅ پرداخت از کیف پول و ساخت ({cost:,} ت)", "callback_data": f"res_do_single:{inv_id}"}]]}
+            send_message(
+                token,
+                chat_id,
+                f"🧾 <b>تایید ساخت اکانت نماینده</b>\n\n"
+                f"🆔 نام کاربری: <code>{html.escape(u_label)}</code>\n"
+                f"📦 حجم: <b>{gb} گیگ</b> | ⏳ مدت: <b>{months} ماه</b>\n"
+                f"💵 هزینه ({ppg:,} ت/گیگ): <b>{cost:,} تومان</b>",
+                reply_markup=kb,
+            )
+            return
+
+        if step == "await_res_custom_gb":
+            user_states.pop(user_id, None)
+            if not get_reseller(user_id):
+                return
+            if not t.isdigit() or int(t) < 1:
+                send_message(token, chat_id, "❌ عدد معتبر وارد کنید:", env=env, user_id=user_id)
+                return
+            gb = int(t)
+            cfg = get_settings(env)
+            max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
+            if max_acc > 0 and gb > max_acc:
+                send_message(token, chat_id, f"❌ سقف حجم هر اکانت نماینده <b>{max_acc} گیگابایت</b> است.", env=env, user_id=user_id)
+                return
+            renew_u = st.get("renew_uname", "")
+            rows = [
+                [{"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"}, {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"}],
+                [{"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"}, {"text": "۶ ماهه", "callback_data": f"res_m:{gb}:6:{renew_u}"}],
+                [{"text": "۱۲ ماهه", "callback_data": f"res_m:{gb}:12:{renew_u}"}],
+            ]
+            send_message(token, chat_id, f"⏳ حجم: <b>{gb} گیگ</b>\nمدت زمان را انتخاب کنید:", reply_markup={"inline_keyboard": rows})
+            return
+
+        if step == "await_admin_reseller_add" and user_id in get_admin_ids(env):
+            user_states.pop(user_id, None)
+            parts = t.split()
+            if not parts or not parts[0].isdigit():
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID [PRICE_PER_GB]</code>\nمثال: <code>123456789 5000</code>", env=env, user_id=user_id)
+                return
+            t_uid = int(parts[0])
+            ppg = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            set_reseller(t_uid, active=True, price_per_gb=ppg)
+            send_message(token, chat_id, f"✅ کاربر <code>{t_uid}</code> به عنوان نماینده فعال شد.", env=env, user_id=user_id)
+            try:
+                send_message(token, t_uid, "🎉 <b>پنل نمایندگی برای شما فعال شد!</b>\nاز دکمهٔ <b>🤝 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
+            except Exception:
+                pass
+            return
+
         if step == "await_admin_setting" and user_id in get_admin_ids(env):
             user_states.pop(user_id, None)
             key = st["key"]
             try:
-                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders"):
+                if key in ("base_price_per_gb", "bulk_threshold_gb", "trial_gb", "trial_hours", "trial_cooldown_days", "reminder_days", "group_id", "max_pending_orders", "reseller_price_per_gb", "reseller_min_gb"):
                     val = int(t.replace(",", "").strip())
                     if val <= 0:
                         raise ValueError("باید مثبت باشد")
+                elif key == "reseller_max_gb_per_acc":
+                    val = int(t.replace(",", "").strip())
+                    if val < 0:
+                        raise ValueError("نباید منفی باشد (0 برای نامحدود)")
                 elif key == "reminder_pct":
                     val = int(t.replace("%", "").strip())
                     if val < 1 or val > 90:
@@ -1869,6 +2088,244 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             send_message(token, chat_id, f"✏️ مدت دلخواه برای <b>{gb} گیگ</b> را به عدد (تعداد ماه) بفرستید:", env=env, user_id=user_id)
             return
         show_invoice(token, chat_id, gb, int(m_s), message_id=msg_id, env=env, target_username=target_username)
+        return
+
+    if data == "reseller_apply":
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ درخواست ارسال شد"})
+        cfg = get_settings(env)
+        bal = get_wallet_balance(user_id)
+        min_tmn = int(cfg.get("reseller_min_gb", 500)) * int(cfg.get("reseller_price_per_gb", 5000))
+        uname_tg = cb["from"].get("username") or "-"
+        kb = {
+            "inline_keyboard": [[
+                {"text": "✅ تایید و فعال‌سازی نماینده", "callback_data": f"adm_res_ok:{user_id}"},
+                {"text": "❌ رد درخواست", "callback_data": f"adm_res_no:{user_id}"},
+            ]]
+        }
+        for adm_id in get_admin_ids(env):
+            try:
+                send_message(
+                    token,
+                    adm_id,
+                    f"🤝 <b>درخواست نمایندگی جدید</b>\n\n"
+                    f"👤 کاربر: <code>{user_id}</code> (@{html.escape(uname_tg)})\n"
+                    f"👛 موجودی کیف پول: <b>{bal:,} تومان</b> (کف پیشنهادی: {min_tmn:,} ت)",
+                    reply_markup=kb,
+                )
+            except Exception:
+                pass
+        edit_message(token, chat_id, msg_id, "✅ درخواست نمایندگی شما برای مدیریت ارسال شد. پس از بررسی اطلاع‌رسانی می‌شود.")
+        return
+
+    if data == "res_create" or data.startswith("res_renew:"):
+        if not get_reseller(user_id):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "دسترسی نمایندگی ندارید", "show_alert": True})
+            return
+        renew_u = data.split(":", 1)[1] if data.startswith("res_renew:") else ""
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        cfg = get_settings(env)
+        max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
+        opts = [g for g in [20, 30, 50, 100, 200] if max_acc <= 0 or g <= max_acc]
+        rows = [[{"text": f"{g} گیگ", "callback_data": f"res_gb:{g}:{renew_u}"} for g in opts[i:i+3]] for i in range(0, len(opts), 3)]
+        rows.append([{"text": "✏️ حجم دلخواه", "callback_data": f"res_gb:custom:{renew_u}"}])
+        title = f"🔄 تمدید اکانت نماینده (<code>{html.escape(renew_u)}</code>)" if renew_u else "➕ ساخت اکانت جدید نماینده"
+        send_message(token, chat_id, f"<b>{title}</b>\nحجم را انتخاب کنید:", reply_markup={"inline_keyboard": rows})
+        return
+
+    if data.startswith("res_gb:"):
+        if not get_reseller(user_id):
+            return
+        _, gb_s, renew_u = data.split(":", 2)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        if gb_s == "custom":
+            user_states[user_id] = {"step": "await_res_custom_gb", "renew_uname": renew_u}
+            send_message(token, chat_id, "✏️ حجم دلخواه را به عدد (گیگابایت) بفرستید:", env=env, user_id=user_id)
+            return
+        gb = int(gb_s)
+        rows = [
+            [{"text": "۱ ماهه", "callback_data": f"res_m:{gb}:1:{renew_u}"}, {"text": "۲ ماهه", "callback_data": f"res_m:{gb}:2:{renew_u}"}],
+            [{"text": "۳ ماهه", "callback_data": f"res_m:{gb}:3:{renew_u}"}, {"text": "۶ ماهه", "callback_data": f"res_m:{gb}:6:{renew_u}"}],
+            [{"text": "۱۲ ماهه", "callback_data": f"res_m:{gb}:12:{renew_u}"}],
+        ]
+        edit_message(token, chat_id, msg_id, f"⏳ حجم: <b>{gb} گیگ</b>\nمدت زمان را انتخاب کنید:", reply_markup={"inline_keyboard": rows})
+        return
+
+    if data.startswith("res_m:"):
+        if not get_reseller(user_id):
+            return
+        _, gb_s, m_s, renew_u = data.split(":", 3)
+        gb, months = int(gb_s), int(m_s)
+        if not renew_u:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+            user_states[user_id] = {"step": "await_res_username", "gb": gb, "months": months}
+            send_message(token, chat_id, "✏️ نام کاربری دلخواه (انگلیسی) را بفرستید یا <code>-</code> بزنید تا خودکار ساخته شود:", env=env, user_id=user_id)
+            return
+        ppg = get_reseller_price_per_gb(user_id, env)
+        cost = gb * ppg
+        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost)
+        if not ok_bal:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"موجودی کافی نیست (نیاز: {cost:,} ت)", "show_alert": True})
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال تمدید..."})
+        try:
+            u = renew_panel_user(env, renew_u, gb, months)
+            full_sub = f"{str(get_settings(env)['panel_url']).rstrip('/')}{u['subscription_url']}"
+            order_id = secrets.token_hex(4).upper()
+            with orders_lock:
+                orders = load_json(ORDERS_PATH)
+                orders[order_id] = {
+                    "id": order_id, "type": "reseller_renew", "target_username": renew_u,
+                    "user_id": user_id, "tg_username": cb["from"].get("username") or "-",
+                    "gb": gb, "months": months, "pay_method": "reseller_wallet",
+                    "tx_key": f"res:{order_id}", "total_toman": cost, "usdt_amount": 0, "usdt_rate": 0,
+                    "status": "approved", "created_at": int(time.time()), "panel_username": renew_u, "sub_url": full_sub,
+                }
+                save_json(ORDERS_PATH, orders)
+            record_reseller_sale(user_id, gb, count=0)
+            send_qr_with_sub(token, chat_id, full_sub, f"✅ <b>تمدید نماینده انجام شد!</b>\n🆔 <code>{html.escape(renew_u)}</code> (+{gb}GB / +{months} ماه)\n👛 موجودی: <b>{new_bal:,} ت</b>\n<code>{html.escape(full_sub)}</code>", env, user_id)
+        except Exception as e:
+            adjust_wallet_balance(user_id, cost)
+            send_message(token, chat_id, f"❌ خطا در تمدید (مبلغ برگشت خورد): {html.escape(str(e))}", env=env, user_id=user_id)
+        return
+
+    if data.startswith("res_do_single:"):
+        if not get_reseller(user_id):
+            return
+        inv_id = data.split(":", 1)[1]
+        inv = get_invoice(inv_id)
+        if not inv or not inv.get("res_single"):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی شده", "show_alert": True})
+            return
+        gb, months, cost = int(inv["gb"]), int(inv["months"]), int(inv["cost"])
+        custom_u = inv.get("custom_u", "")
+        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost)
+        if not ok_bal:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال ساخت..."})
+        order_id = secrets.token_hex(4).upper()
+        prefix_u = custom_u if custom_u else f"r_{str(user_id)[-4:]}_{order_id.lower()}"
+        try:
+            u = create_panel_user(env, order_id, user_id, gb, months, "reseller_wallet", custom_prefix=prefix_u)
+            uname = u["username"]
+            full_sub = f"{str(get_settings(env)['panel_url']).rstrip('/')}{u['subscription_url']}"
+            with orders_lock:
+                orders = load_json(ORDERS_PATH)
+                orders[order_id] = {
+                    "id": order_id, "type": "reseller_buy", "target_username": "",
+                    "user_id": user_id, "tg_username": cb["from"].get("username") or "-",
+                    "gb": gb, "months": months, "pay_method": "reseller_wallet",
+                    "tx_key": f"res:{order_id}", "total_toman": cost, "usdt_amount": 0, "usdt_rate": 0,
+                    "status": "approved", "created_at": int(time.time()), "panel_username": uname, "sub_url": full_sub,
+                }
+                save_json(ORDERS_PATH, orders)
+            record_reseller_sale(user_id, gb, count=1)
+            edit_message(token, chat_id, msg_id, f"✅ اکانت <code>{html.escape(uname)}</code> ساخته شد (موجودی: <b>{new_bal:,} ت</b>).")
+            send_qr_with_sub(token, chat_id, full_sub, f"🎉 <b>اکانت نماینده آماده است!</b>\n🆔 <code>{html.escape(uname)}</code>\n📦 {gb}GB / {months} ماه\n\n<code>{html.escape(full_sub)}</code>", env, user_id)
+        except Exception as e:
+            adjust_wallet_balance(user_id, cost)
+            send_message(token, chat_id, f"❌ خطا در ساخت (مبلغ برگشت خورد): {html.escape(str(e))}", env=env, user_id=user_id)
+        return
+
+    if data == "res_bulk":
+        if not get_reseller(user_id):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_res_bulk"}
+        send_message(token, chat_id, "📦 تعداد، حجم و مدت را با فاصله بفرستید:\n<code>COUNT GB MONTHS</code>\nمثال: <code>5 30 1</code> (۵ اکانت ۳۰ گیگ ۱ ماهه)", env=env, user_id=user_id)
+        return
+
+    if data.startswith("res_do_bulk:"):
+        if not get_reseller(user_id):
+            return
+        inv_id = data.split(":", 1)[1]
+        inv = get_invoice(inv_id)
+        if not inv or not inv.get("res_bulk"):
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "منقضی شده", "show_alert": True})
+            return
+        cnt, gb, months, cost = int(inv["cnt"]), int(inv["gb"]), int(inv["months"]), int(inv["cost"])
+        ok_bal, new_bal = adjust_wallet_balance(user_id, -cost)
+        if not ok_bal:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی نیست", "show_alert": True})
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "⏳ در حال ساخت گروهی..."})
+        edit_message(token, chat_id, msg_id, f"⏳ در حال ساخت {cnt} اکانت...")
+        panel_base = str(get_settings(env)["panel_url"]).rstrip("/")
+        created_lines = []
+        created_ok = 0
+        for _ in range(cnt):
+            oid = secrets.token_hex(4).upper()
+            pref = f"r_{str(user_id)[-4:]}_{oid.lower()}"
+            try:
+                u = create_panel_user(env, oid, user_id, gb, months, "reseller_wallet", custom_prefix=pref)
+                uname = u["username"]
+                full_sub = f"{panel_base}{u['subscription_url']}"
+                with orders_lock:
+                    orders = load_json(ORDERS_PATH)
+                    orders[oid] = {
+                        "id": oid, "type": "reseller_buy", "target_username": "",
+                        "user_id": user_id, "tg_username": cb["from"].get("username") or "-",
+                        "gb": gb, "months": months, "pay_method": "reseller_wallet",
+                        "tx_key": f"res:{oid}", "total_toman": gb * get_reseller_price_per_gb(user_id, env), "usdt_amount": 0, "usdt_rate": 0,
+                        "status": "approved", "created_at": int(time.time()), "panel_username": uname, "sub_url": full_sub,
+                    }
+                    save_json(ORDERS_PATH, orders)
+                created_ok += 1
+                created_lines.append(f"• <code>{html.escape(uname)}</code>\n<code>{html.escape(full_sub)}</code>")
+            except Exception as e:
+                created_lines.append(f"• ❌ خطا: {html.escape(str(e))}")
+        if created_ok < cnt:
+            refund = (cnt - created_ok) * gb * get_reseller_price_per_gb(user_id, env)
+            _, new_bal = adjust_wallet_balance(user_id, refund)
+        if created_ok > 0:
+            record_reseller_sale(user_id, created_ok * gb, count=created_ok)
+        send_message(token, chat_id, f"✅ <b>{created_ok} از {cnt} اکانت ساخته شد</b> (موجودی: <b>{new_bal:,} ت</b>)\n\n" + "\n\n".join(created_lines), env=env, user_id=user_id)
+        return
+
+    if data == "res_list":
+        if not get_reseller(user_id):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        orders = load_json(ORDERS_PATH)
+        seen = set()
+        mine = []
+        for o in sorted(orders.values(), key=lambda x: x.get("created_at", 0), reverse=True):
+            un = o.get("panel_username")
+            if o.get("user_id") == user_id and o.get("type", "").startswith("reseller_") and un and un not in seen:
+                seen.add(un)
+                mine.append(o)
+        if not mine:
+            send_message(token, chat_id, "📭 هنوز اکانتی در پنل نمایندگی نساخته‌اید.", env=env, user_id=user_id)
+            return
+        for o in mine[:10]:
+            un = o["panel_username"]
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "📊 وضعیت", "callback_data": f"sub_status:{un}"}, {"text": "🔄 تمدید", "callback_data": f"res_renew:{un}"}],
+                    [{"text": "🔑 تغییر ساب", "callback_data": f"sub_revoke:{un}"}, {"text": "⏸ قطع/وصل", "callback_data": f"res_toggle:{un}"}],
+                ]
+            }
+            send_message(token, chat_id, f"🆔 <code>{html.escape(un)}</code> ({o['gb']}GB / {o['months']} ماه)\n<code>{html.escape(o.get('sub_url', ''))}</code>", reply_markup=kb)
+        return
+
+    if data.startswith("res_toggle:"):
+        if not get_reseller(user_id):
+            return
+        un = data.split(":", 1)[1]
+        orders = load_json(ORDERS_PATH)
+        owns = any(o.get("user_id") == user_id and o.get("panel_username") == un for o in orders.values())
+        if not owns:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "دسترسی ندارید", "show_alert": True})
+            return
+        try:
+            pu = panel_request(env, f"/api/user/{urllib.parse.quote(un)}")
+            new_st = "disabled" if pu.get("status") == "active" else "active"
+            panel_request(env, f"/api/user/{urllib.parse.quote(un)}", method="PUT", body={"status": new_st})
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"وضعیت: {new_st}"})
+            send_message(token, chat_id, f"✅ وضعیت اکانت <code>{html.escape(un)}</code> به <b>{new_st}</b> تغییر یافت.", env=env, user_id=user_id)
+        except Exception as e:
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "خطا", "show_alert": True})
+            send_message(token, chat_id, f"❌ خطا: {html.escape(str(e))}", env=env, user_id=user_id)
         return
 
     if data == "check_join":
@@ -2137,6 +2594,69 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         send_message(token, chat_id, rep, env=env, user_id=user_id)
         return
 
+    if data == "adm_resellers":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        with resellers_lock:
+            res_all = load_json(RESELLERS_PATH)
+        lines = ["🤝 <b>مدیریت نمایندگان:</b>\n"]
+        kb_rows = [[{"text": "➕ افزودن نماینده با آیدی", "callback_data": "adm_res_add"}]]
+        active_list = [(k, v) for k, v in res_all.items() if v.get("active")]
+        if not active_list:
+            lines.append("هنوز نمایندهٔ فعالی ثبت نشده است.")
+        else:
+            for uid_s, r in active_list[:15]:
+                bal = get_wallet_balance(int(uid_s))
+                ppg = r.get("price_per_gb") or get_settings(env)["reseller_price_per_gb"]
+                lines.append(f"• <code>{uid_s}</code> | تعرفه: {int(ppg):,} ت | کیف‌پول: {bal:,} ت | فروش: {r.get('total_gb_sold', 0)}GB")
+                kb_rows.append([{"text": f"🚫 لغو نمایندگی {uid_s}", "callback_data": f"adm_res_off:{uid_s}"}])
+        kb_rows.append([{"text": "🔙 بازگشت به پنل", "callback_data": "adm_refresh"}])
+        edit_message(token, chat_id, msg_id, "\n".join(lines), reply_markup={"inline_keyboard": kb_rows})
+        return
+
+    if data == "adm_res_add":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_admin_reseller_add"}
+        send_message(token, chat_id, "🤝 آیدی عددی تلگرام نماینده را بفرستید (اختیاری: قیمت هر گیگ):\n<code>USER_ID [PRICE]</code>\nمثال: <code>123456789 5000</code>", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_res_ok:") or data.startswith("adm_res_no:") or data.startswith("adm_res_off:"):
+        if user_id not in get_admin_ids(env):
+            return
+        act, t_uid_s = data.split(":", 1)
+        t_uid = int(t_uid_s)
+        if act == "adm_res_ok":
+            set_reseller(t_uid, active=True)
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ نماینده فعال شد"})
+            try:
+                tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
+            except Exception:
+                pass
+            send_message(token, chat_id, f"✅ کاربر <code>{t_uid}</code> به عنوان نماینده فعال شد.")
+            try:
+                send_message(token, t_uid, "🎉 <b>درخواست نمایندگی شما تایید شد!</b>\nاز دکمهٔ <b>🤝 پنل نمایندگی</b> در منو استفاده کنید.", env=env, user_id=t_uid)
+            except Exception:
+                pass
+        elif act == "adm_res_no":
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ رد شد"})
+            try:
+                tg_api(token, "editMessageReplyMarkup", {"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
+            except Exception:
+                pass
+            send_message(token, chat_id, f"❌ درخواست نمایندگی <code>{t_uid}</code> رد شد.")
+            try:
+                send_message(token, t_uid, "❌ درخواست نمایندگی شما تایید نشد.", env=env, user_id=t_uid)
+            except Exception:
+                pass
+        else:
+            set_reseller(t_uid, active=False)
+            tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🚫 نمایندگی لغو شد"})
+            show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
     if data == "adm_cycle_card_mode":
         if user_id not in get_admin_ids(env):
             return
@@ -2403,6 +2923,9 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "panel_user": "نام کاربری ادمین پنل",
             "panel_pass": "رمز عبور ادمین پنل",
             "group_id": "آیدی عددی گروه در پنل PasarGuard که کاربران جدید عضو آن می‌شوند (در پنل‌های تک‌گروهه همان 1 است)",
+            "reseller_price_per_gb": "قیمت هر گیگ برای نماینده به تومان (مثلاً 5000)",
+            "reseller_min_gb": "حداقل گیگ شرط دریافت نمایندگی (مثلاً 500)",
+            "reseller_max_gb_per_acc": "حداکثر حجم هر تک‌اکانت نماینده به گیگ (0 = نامحدود)",
         }
         user_states[user_id] = {"step": "await_admin_setting", "key": key}
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
