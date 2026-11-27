@@ -1242,8 +1242,15 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         user_states.pop(user_id, None)
         cfg = get_settings(env)
         pct = cfg.get("referral_reward_pct", 20.0)
-        bot_u = bot_info_cache.get("username") or "vpnnnVipbot"
-        ref_link = f"https://t.me/{bot_u}?start=ref_{user_id}"
+        bot_u = bot_info_cache.get("username")
+        if not bot_u:
+            try:
+                bot_u = tg_api(token, "getMe", timeout=8).get("result", {}).get("username", "")
+                if bot_u:
+                    bot_info_cache["username"] = bot_u
+            except Exception:
+                bot_u = ""
+        ref_link = f"https://t.me/{bot_u}?start=ref_{user_id}" if bot_u else "نام کاربری ربات در دسترس نیست"
         with users_lock:
             cnt = int(load_json(USERS_PATH).get(str(user_id), {}).get("referrals_count", 0))
         send_message(
@@ -1456,7 +1463,7 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
             user_states.pop(user_id, None)
             parts = t.split()
             if len(parts) != 2 or not parts[0].isdigit():
-                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>5842503635 100000</code> (یا عدد منفی برای کسر)", env=env, user_id=user_id)
+                send_message(token, chat_id, "❌ فرمت صحیح: <code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code> (یا عدد منفی برای کسر)", env=env, user_id=user_id)
                 return
             try:
                 t_uid = int(parts[0])
@@ -1876,7 +1883,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         send_message(
             token,
             chat_id,
-            "👛 آیدی عددی کاربر و مبلغ (به تومان) را بفرستید:\n<code>USER_ID AMOUNT</code>\nمثال: <code>5842503635 100000</code>",
+            "👛 آیدی عددی کاربر و مبلغ (به تومان) را بفرستید:\n<code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code>",
             env=env,
             user_id=user_id,
         )
