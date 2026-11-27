@@ -1351,6 +1351,43 @@ def build_month_keyboard(gb: int, env: dict[str, str] | None = None, prefix: str
     return {"inline_keyboard": rows}
 
 
+def show_admin_wallet_user(token: str, chat_id: int, env: dict[str, str], target_uid: int, message_id: int | None = None) -> None:
+    bal = get_wallet_balance(target_uid)
+    with users_file_lock(USERS_PATH):
+        u_rec = load_json(USERS_PATH).get(str(target_uid), {})
+    uname = u_rec.get("username") or "-"
+    txt = (
+        f"👛 <b>مدیریت کیف پول کاربر</b>\n\n"
+        f"👤 کاربر: <code>{target_uid}</code> (@{html.escape(str(uname))})\n"
+        f"💵 موجودی فعلی: <b>{bal:,} تومان</b>\n\n"
+        "یکی از گزینه‌های زیر را انتخاب کنید:"
+    )
+    kb = {
+        "inline_keyboard": [
+            [
+                {"text": "➕ ۵۰ هزار", "callback_data": f"adm_w_do:{target_uid}:50000"},
+                {"text": "➕ ۱۰۰ هزار", "callback_data": f"adm_w_do:{target_uid}:100000"},
+            ],
+            [
+                {"text": "➕ ۵۰۰ هزار", "callback_data": f"adm_w_do:{target_uid}:500000"},
+                {"text": "➕ ۲.۵ میلیون", "callback_data": f"adm_w_do:{target_uid}:2500000"},
+            ],
+            [
+                {"text": "➖ کسر ۵۰ هزار", "callback_data": f"adm_w_do:{target_uid}:-50000"},
+                {"text": "🗑 صفر کردن کیف پول", "callback_data": f"adm_w_zero:{target_uid}"},
+            ],
+            [
+                {"text": "✏️ مبلغ دلخواه (+/-)", "callback_data": f"adm_w_custom:{target_uid}"},
+                {"text": "🔙 بازگشت", "callback_data": "adm_wallet"},
+            ],
+        ]
+    }
+    if message_id is not None:
+        edit_message(token, chat_id, message_id, txt, reply_markup=kb)
+    else:
+        send_message(token, chat_id, txt, reply_markup=kb)
+
+
 def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: int | None = None) -> None:
     orders = load_json(ORDERS_PATH)
     users = load_json(USERS_PATH)
@@ -2282,6 +2319,37 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
                 send_message(token, chat_id, f"✅ پاسخ شما به کاربر <code>{target_uid}</code> ارسال شد.", env=env, user_id=user_id)
             except Exception as e:
                 send_message(token, chat_id, f"❌ خطا در ارسال پاسخ: {html.escape(str(e))}", env=env, user_id=user_id)
+            return
+
+        if step == "await_admin_wallet_user" and user_id in get_admin_ids(env):
+            t_uid = resolve_tg_user_id(t)
+            if t_uid is None:
+                send_message(token, chat_id, "❌ کاربر با این آیدی یا @یوزرنیم پیدا نشد. دوباره بفرستید:", env=env, user_id=user_id)
+                return
+            user_states.pop(user_id, None)
+            show_admin_wallet_user(token, chat_id, env, t_uid)
+            return
+
+        if step == "await_admin_wallet_amt" and user_id in get_admin_ids(env):
+            t_uid = int(st["target_uid"])
+            clean = t.replace(",", "").strip()
+            try:
+                delta = int(clean)
+            except Exception:
+                send_message(token, chat_id, "❌ فقط یک عدد بفرستید (مثلاً <code>100000</code> یا <code>-50000</code>). دوباره بفرستید:", env=env, user_id=user_id)
+                return
+            ok, new_bal = adjust_wallet_balance(t_uid, delta, note="تغییر دستی مدیریت")
+            if not ok:
+                send_message(token, chat_id, "❌ موجودی کاربر کافی نیست تا این مقدار کسر شود. عدد دیگری بفرستید:", env=env, user_id=user_id)
+                return
+            user_states.pop(user_id, None)
+            send_message(token, chat_id, f"✅ موجودی کاربر <code>{t_uid}</code> به <b>{new_bal:,} تومان</b> تغییر یافت.", env=env, user_id=user_id)
+            if delta > 0:
+                try:
+                    send_message(token, t_uid, f"🎁 کیف پول شما به مبلغ <b>{delta:,} تومان</b> توسط مدیریت شارژ شد.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>", env=env, user_id=t_uid)
+                except Exception:
+                    pass
+            show_admin_wallet_user(token, chat_id, env, t_uid)
             return
 
         if step == "await_admin_wallet" and user_id in get_admin_ids(env):
@@ -3427,14 +3495,21 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         if user_id not in get_admin_ids(env):
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
-        user_states[user_id] = {"step": "await_admin_wallet"}
-        send_message(
-            token,
-            chat_id,
-            "👛 آیدی عددی کاربر و مبلغ (به تومان) را بفرستید:\n<code>USER_ID AMOUNT</code>\nمثال: <code>123456789 100000</code>",
-            env=env,
-            user_id=user_id,
-        )
+        with users_file_lock(USERS_PATH):
+            users = load_json(USERS_PATH)
+        recent = sorted(
+            [(int(k), v) for k, v in users.items() if k.isdigit()],
+            key=lambda kv: int(kv[1].get("last_seen") or 0),
+            reverse=True,
+        )[:8]
+        kb_rows = []
+        for uid_i, rec in recent:
+            un = rec.get("username") or str(uid_i)
+            bal_i = int(rec.get("balance_toman") or 0)
+            kb_rows.append([{"text": f"👤 @{un} ({bal_i:,} ت)", "callback_data": f"adm_w_pick:{uid_i}"}])
+        kb_rows.append([{"text": "✏️ وارد کردن آیدی یا @یوزرنیم", "callback_data": "adm_w_search"}])
+        kb_rows.append([{"text": "🔙 بازگشت به پنل", "callback_data": "adm_refresh"}])
+        edit_message(token, chat_id, msg_id, "👛 <b>شارژ/تغییر دستی کیف پول</b>\n\nکاربر مورد نظر را انتخاب کنید:", reply_markup={"inline_keyboard": kb_rows})
         return
 
     if data == "adm_backup":
@@ -3691,10 +3766,58 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
     if data.startswith("adm_u_wallet:"):
         if user_id not in get_admin_ids(env):
             return
-        t_uid = data.split(":", 1)[1]
+        t_uid = int(data.split(":", 1)[1])
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
-        user_states[user_id] = {"step": "await_admin_wallet"}
-        send_message(token, chat_id, f"👛 مبلغ را با آیدی بفرستید:\n<code>{t_uid} 100000</code>", env=env, user_id=user_id)
+        show_admin_wallet_user(token, chat_id, env, t_uid, message_id=msg_id)
+        return
+
+    if data == "adm_w_search":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_admin_wallet_user"}
+        send_message(token, chat_id, "✏️ آیدی عددی یا <code>@username</code> کاربر را بفرستید:", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_w_pick:"):
+        if user_id not in get_admin_ids(env):
+            return
+        t_uid = int(data.split(":", 1)[1])
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        show_admin_wallet_user(token, chat_id, env, t_uid, message_id=msg_id)
+        return
+
+    if data.startswith("adm_w_custom:"):
+        if user_id not in get_admin_ids(env):
+            return
+        t_uid = int(data.split(":", 1)[1])
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_admin_wallet_amt", "target_uid": t_uid}
+        send_message(token, chat_id, f"✏️ مبلغ تغییر کیف پول برای <code>{t_uid}</code> را بفرستید:\n(مثلاً <code>100000</code> برای افزایش یا <code>-50000</code> برای کسر)", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_w_do:") or data.startswith("adm_w_zero:"):
+        if user_id not in get_admin_ids(env):
+            return
+        if data.startswith("adm_w_zero:"):
+            t_uid = int(data.split(":", 1)[1])
+            cur_b = get_wallet_balance(t_uid)
+            delta = -cur_b
+        else:
+            _, uid_s, d_s = data.split(":", 2)
+            t_uid, delta = int(uid_s), int(d_s)
+        if delta != 0:
+            ok, new_bal = adjust_wallet_balance(t_uid, delta, note="تغییر دکمه‌ای مدیریت")
+            if not ok:
+                tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "موجودی کافی برای کسر نیست", "show_alert": True})
+                return
+            if delta > 0:
+                try:
+                    send_message(token, t_uid, f"🎁 کیف پول شما به مبلغ <b>{delta:,} تومان</b> توسط مدیریت شارژ شد.\n👛 موجودی فعلی: <b>{new_bal:,} تومان</b>", env=env, user_id=t_uid)
+                except Exception:
+                    pass
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ انجام شد"})
+        show_admin_wallet_user(token, chat_id, env, t_uid, message_id=msg_id)
         return
 
     if data.startswith("adm_u_addgb:") or data.startswith("adm_u_adddays:") or data.startswith("adm_u_toggle:"):
