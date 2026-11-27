@@ -1185,7 +1185,7 @@ def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = 
             targets = {int(raw_cid)}
         else:
             targets = get_admin_ids(env)
-    files = [ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH, LEDGER_PATH]
+    files = [ENV_PATH, ORDERS_PATH, USERS_PATH, SETTINGS_PATH, COUPONS_PATH, REMINDERS_PATH, META_PATH, RESELLERS_PATH, LEDGER_PATH]
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         zip_path = Path(tmp.name)
     sent = 0
@@ -1195,8 +1195,9 @@ def send_backup_zip(token: str, env: dict[str, str], targets: set[int] | None = 
                 if p.exists():
                     zf.write(p, arcname=p.name)
             if TENANTS_DIR.exists():
-                for tp in TENANTS_DIR.rglob("*.json"):
-                    zf.write(tp, arcname=str(tp.relative_to(DATA_DIR)))
+                for pattern in ("*.json", ".env"):
+                    for tp in TENANTS_DIR.rglob(pattern):
+                        zf.write(tp, arcname=str(tp.relative_to(DATA_DIR)))
         now_tehran = (datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)).strftime("%Y-%m-%d %H:%M")
         caption = f"🗄 <b>بکاپ خودکار دیتابیس ربات</b>\n🕒 {now_tehran}"
         for adm_id in targets:
