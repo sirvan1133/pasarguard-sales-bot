@@ -1,4 +1,6 @@
-# PasarGuard Telegram Sales & Multi-Tenant Reseller Bot
+<div dir="rtl">
+
+# ربات فروش و نمایندگی اختصاصی PasarGuard
 
 ربات جامع فروش، تمدید، پشتیبانی و **نمایندگی اختصاصی (White-Label Sub-Bot)** برای پنل **PasarGuard** — نوشته شده با Python استاندارد (بدون هیچ وابستگی خارجی، فقط `python3` و `qrencode`).
 
@@ -44,9 +46,13 @@
 
 ## نصب تک‌خطی روی سرور (Ubuntu / Debian)
 
+<div dir="ltr">
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/main/install.sh | sudo bash
 ```
+
+</div>
 
 در زمان نصب فقط **توکن ربات** و **آیدی عددی ادمین** پرسیده می‌شود و نصب پیش‌نیازها، ساخت سرویس `systemd` و راه‌اندازی خودکار انجام می‌گردد.
 پس از نصب، وارد **`👑 پنل ادمین`** در تلگرام شوید و مشخصات پنل و روش‌های پرداخت را تنظیم کنید.
@@ -67,8 +73,14 @@ curl -fsSL https://raw.githubusercontent.com/sirvan1133/pasarguard-sales-bot/mai
 
 ## دستورات مدیریت سرویس
 
+<div dir="ltr">
+
 ```bash
 systemctl status sales-bot.service     # بررسی وضعیت ربات اصلی
 systemctl restart sales-bot.service    # ری‌استارت ربات اصلی
 journalctl -u sales-bot.service -f     # مشاهدهٔ زندهٔ لاگ‌ها
 ```
+
+</div>
+
+</div>
