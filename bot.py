@@ -44,6 +44,7 @@ REMINDERS_PATH = DATA_DIR / "reminders.json"
 META_PATH = DATA_DIR / "meta.json"
 RESELLERS_PATH = DATA_DIR / "resellers.json"
 LEDGER_PATH = DATA_DIR / "ledger.json"
+TICKETS_PATH = DATA_DIR / "tickets.json"
 TENANTS_DIR = DATA_DIR / "tenants"
 
 DEFAULT_GB_OPTIONS = [20, 30, 50, 100, 200, 400, 1000]
@@ -159,7 +160,11 @@ def main_keyboard(user_id: int, env: dict[str, str]) -> dict:
 def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
     is_res = bool(get_reseller(user_id)) or (is_tenant_bot(env) and user_id in get_admin_ids(env))
     res_lbl = "💼 پنل نمایندگی" if is_res else "🤝 درخواست نمایندگی"
-    rows = [
+    miniapp_url = (env.get("MINIAPP_URL") or "https://drhomes.ir/vpnapp/").strip()
+    rows = []
+    if miniapp_url and not is_tenant_bot(env):
+        rows.append([{"text": "🚀 پنل شیشه‌ای پیشرفته (مینی‌اپ)", "web_app": {"url": miniapp_url}, "style": "primary"}])
+    rows.extend([
         [{"text": "🛒 خرید سرویس جدید", "callback_data": "home:buy", "style": "success"}],
         [
             {"text": "♻️ تمدید سرویس", "callback_data": "home:renew"},
@@ -178,7 +183,7 @@ def build_home_inline_keyboard(user_id: int, env: dict[str, str]) -> dict:
             {"text": "📊 استعلام اشتراک", "callback_data": "home:check"},
         ],
         [{"text": res_lbl, "callback_data": "res_panel", "style": "danger"}],
-    ]
+    ])
     if user_id in get_admin_ids(env):
         rows.append([{"text": "👑 پنل ادمین", "callback_data": "adm_open", "style": "primary"}])
     return {"inline_keyboard": rows}
@@ -2397,18 +2402,55 @@ def handle_text(token: str, env: dict[str, str], m: dict) -> None:
         if step == "await_support":
             user_states.pop(user_id, None)
             uname_tg = m["from"].get("username") or "-"
-            kb = {"inline_keyboard": [[{"text": "↩️ پاسخ به کاربر", "callback_data": f"adm_reply:{user_id}"}]]}
+            now = int(time.time())
+            tid = f"T{secrets.token_hex(3).upper()}"
+            tickets = load_json(TICKETS_PATH)
+            tickets[tid] = {
+                "id": tid, "user_id": user_id, "username": uname_tg,
+                "subject": (t[:60] + "...") if len(t) > 60 else t,
+                "category": "پشتیبانی ربات", "status": "waiting_admin",
+                "created_at": now, "updated_at": now,
+                "messages": [{"sender": "user", "text": t, "ts": now}],
+            }
+            save_json(TICKETS_PATH, tickets)
+            kb = {
+                "inline_keyboard": [[
+                    {"text": f"↩️ پاسخ به #{tid}", "callback_data": f"adm_tk_reply:{tid}"},
+                    {"text": "🔒 بستن تیکت", "callback_data": f"adm_tk_close:{tid}"},
+                ]]
+            }
             for adm_id in get_admin_ids(env):
                 try:
                     send_message(
                         token,
                         adm_id,
-                        f"📩 <b>پیام پشتیبانی جدید</b>\n👤 کاربر: <code>{user_id}</code> (@{html.escape(uname_tg)})\n\n💬 متن:\n{html.escape(t)}",
+                        f"🎫 <b>تیکت پشتیبانی جدید</b> <code>#{tid}</code>\n👤 کاربر: <code>{user_id}</code> (@{html.escape(uname_tg)})\n\n💬 پیام:\n{html.escape(t)}",
                         reply_markup=kb,
                     )
                 except Exception:
                     pass
-            send_message(token, chat_id, "✅ پیام شما برای پشتیبانی ارسال شد. به‌زودی پاسخ داده می‌شود.", env=env, user_id=user_id)
+            send_message(token, chat_id, f"✅ تیکت <code>#{tid}</code> ثبت و برای پشتیبانی ارسال شد. پاسخ از طریق همین ربات و مینی‌اپ نمایش داده می‌شود.", env=env, user_id=user_id)
+            return
+
+        if step == "await_tk_reply" and user_id in get_admin_ids(env):
+            user_states.pop(user_id, None)
+            tid = st.get("ticket_id", "")
+            tickets = load_json(TICKETS_PATH)
+            tk = tickets.get(tid)
+            if not tk:
+                send_message(token, chat_id, "❌ تیکت یافت نشد.", env=env, user_id=user_id)
+                return
+            now = int(time.time())
+            tk.setdefault("messages", []).append({"sender": "admin", "text": t, "ts": now})
+            tk["status"] = "answered"
+            tk["updated_at"] = now
+            save_json(TICKETS_PATH, tickets)
+            t_uid = int(tk["user_id"])
+            try:
+                send_message(token, t_uid, f"🎫 <b>پاسخ پشتیبانی به تیکت <code>#{tid}</code></b>\n📌 {html.escape(tk['subject'])}\n\n💬 {html.escape(t)}")
+            except Exception:
+                pass
+            send_message(token, chat_id, f"✅ پاسخ تیکت <code>#{tid}</code> ثبت و برای کاربر ارسال شد.", env=env, user_id=user_id)
             return
 
         if step == "await_admin_reply" and user_id in get_admin_ids(env):
@@ -3624,6 +3666,32 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🔄 بروزرسانی شد"})
         show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
+    if data.startswith("adm_tk_reply:"):
+        if user_id not in get_admin_ids(env):
+            return
+        tid = data.split(":", 1)[1]
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        user_states[user_id] = {"step": "await_tk_reply", "ticket_id": tid}
+        send_message(token, chat_id, f"↩️ پاسخ خود برای تیکت <code>#{html.escape(tid)}</code> را بنویسید:", env=env, user_id=user_id)
+        return
+
+    if data.startswith("adm_tk_close:"):
+        if user_id not in get_admin_ids(env):
+            return
+        tid = data.split(":", 1)[1]
+        tickets = load_json(TICKETS_PATH)
+        tk = tickets.get(tid)
+        if tk:
+            tk["status"] = "closed"
+            tk["updated_at"] = int(time.time())
+            save_json(TICKETS_PATH, tickets)
+            try:
+                send_message(token, int(tk["user_id"]), f"🔒 تیکت <code>#{tid}</code> توسط پشتیبانی بسته شد.")
+            except Exception:
+                pass
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": f"تیکت #{tid} بسته شد"})
         return
 
     if data.startswith("adm_reply:"):
