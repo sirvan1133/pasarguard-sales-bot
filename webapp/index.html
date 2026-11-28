@@ -148,6 +148,19 @@
     }
     input:focus, textarea:focus, select:focus { border-color: var(--accent); }
     label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 5px; }
+    .seg-group {
+      display: flex; gap: 4px; background: rgba(10, 15, 30, 0.65);
+      border: 1px solid var(--card-border); border-radius: 12px; padding: 4px;
+    }
+    .seg-btn {
+      flex: 1; text-align: center; padding: 7px 4px; border-radius: 9px;
+      font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer;
+      transition: all .2s cubic-bezier(.2,.8,.2,1); user-select: none; white-space: nowrap;
+    }
+    .seg-btn.active {
+      background: linear-gradient(135deg, #4f8cff, #3b82f6); color: #fff;
+      box-shadow: 0 3px 10px rgba(79,140,255,0.3);
+    }
 
     /* Progress Bar */
     .prog-wrap { background: rgba(255,255,255,0.08); height: 8px; border-radius: 999px; overflow: hidden; margin: 8px 0; }
@@ -392,12 +405,13 @@
             <label>موضوع:</label>
             <input id="tkSubject" placeholder="مثلاً مشکل اتصال یا پیگیری پرداخت" />
             <label>دسته‌بندی:</label>
-            <select id="tkCat">
-              <option value="پشتیبانی فنی">🛠 پشتیبانی فنی و اتصال</option>
-              <option value="فروش و پرداخت">💳 فروش و پرداخت</option>
-              <option value="نمایندگی">💼 نمایندگی</option>
-              <option value="سایر">📌 سایر</option>
-            </select>
+            <input type="hidden" id="tkCat" value="پشتیبانی فنی" />
+            <div class="seg-group" data-seg="tkCat" style="flex-wrap:wrap">
+              <div class="seg-btn active" data-val="پشتیبانی فنی" onclick="setSeg('tkCat','پشتیبانی فنی')">🛠 فنی</div>
+              <div class="seg-btn" data-val="فروش و پرداخت" onclick="setSeg('tkCat','فروش و پرداخت')">💳 پرداخت</div>
+              <div class="seg-btn" data-val="نمایندگی" onclick="setSeg('tkCat','نمایندگی')">💼 نمایندگی</div>
+              <div class="seg-btn" data-val="سایر" onclick="setSeg('tkCat','سایر')">📌 سایر</div>
+            </div>
             <label>توضیحات:</label>
             <textarea id="tkMsg" rows="3" placeholder="پیام خود را بنویسید..."></textarea>
             <div class="btn-row" style="margin-top:10px">
@@ -461,7 +475,7 @@
         <input id="adm_gb_options" placeholder="20,30,50,100,200,400,1000" />
 
         <div class="btn-row">
-          <div style="flex:1"><label>🎁 تست رایگان:</label><select id="adm_trial_enabled"><option value="1">فعال</option><option value="0">غیرفعال</option></select></div>
+          <div style="flex:1"><label>🎁 تست رایگان:</label><input type="hidden" id="adm_trial_enabled" value="1" /><div class="seg-group" data-seg="adm_trial_enabled"><div class="seg-btn active" data-val="1" onclick="setSeg('adm_trial_enabled','1')">فعال</div><div class="seg-btn" data-val="0" onclick="setSeg('adm_trial_enabled','0')">غیرفعال</div></div></div>
           <div style="flex:1"><label>حجم تست (GB):</label><input id="adm_trial_gb" type="number" /></div>
         </div>
         <div class="btn-row">
@@ -470,7 +484,7 @@
         </div>
 
         <div class="btn-row">
-          <div style="flex:1"><label>📢 قفل کانال:</label><select id="adm_force_join_enabled"><option value="0">غیرفعال</option><option value="1">فعال</option></select></div>
+          <div style="flex:1"><label>📢 قفل کانال:</label><input type="hidden" id="adm_force_join_enabled" value="0" /><div class="seg-group" data-seg="adm_force_join_enabled"><div class="seg-btn active" data-val="0" onclick="setSeg('adm_force_join_enabled','0')">غیرفعال</div><div class="seg-btn" data-val="1" onclick="setSeg('adm_force_join_enabled','1')">فعال</div></div></div>
           <div style="flex:1"><label>آیدی کانال:</label><input id="adm_force_join_channel" placeholder="@channel" /></div>
         </div>
 
@@ -486,9 +500,19 @@
         <label>🪙 آدرس ولت تتر (BEP20):</label>
         <input id="adm_usdt_bep20" dir="ltr" />
 
-        <div class="btn-row">
-          <div style="flex:1"><label>⚡ حالت کارت‌به‌کارت:</label><select id="adm_card_instant_mode"><option value="all">فوری همه</option><option value="trusted">مشتری قدیمی</option><option value="off">تایید دستی</option></select></div>
-          <div style="flex:1"><label>🎛 حالت منوی ربات:</label><select id="adm_menu_mode"><option value="inline">فقط شیشه‌ای</option><option value="keyboard">فقط کیبوردی</option><option value="both">هر دو</option></select></div>
+        <label>⚡ حالت کارت‌به‌کارت:</label>
+        <input type="hidden" id="adm_card_instant_mode" value="all" />
+        <div class="seg-group" data-seg="adm_card_instant_mode">
+          <div class="seg-btn active" data-val="all" onclick="setSeg('adm_card_instant_mode','all')">فوری همه</div>
+          <div class="seg-btn" data-val="trusted" onclick="setSeg('adm_card_instant_mode','trusted')">مشتری قدیمی</div>
+          <div class="seg-btn" data-val="off" onclick="setSeg('adm_card_instant_mode','off')">تایید دستی</div>
+        </div>
+        <label>🎛 حالت منوی ربات:</label>
+        <input type="hidden" id="adm_menu_mode" value="inline" />
+        <div class="seg-group" data-seg="adm_menu_mode">
+          <div class="seg-btn active" data-val="inline" onclick="setSeg('adm_menu_mode','inline')">فقط شیشه‌ای</div>
+          <div class="seg-btn" data-val="keyboard" onclick="setSeg('adm_menu_mode','keyboard')">فقط کیبوردی</div>
+          <div class="seg-btn" data-val="both" onclick="setSeg('adm_menu_mode','both')">هر دو</div>
         </div>
 
         <div class="btn-row">
@@ -504,8 +528,8 @@
         <input id="adm_reseller_max_gb_per_acc" type="number" />
 
         <div class="btn-row">
-          <div style="flex:1"><label>🛠 حالت تعمیر:</label><select id="adm_maintenance_mode"><option value="0">خاموش</option><option value="1">روشن</option></select></div>
-          <div style="flex:1"><label>🗄 بکاپ خودکار:</label><select id="adm_backup_enabled"><option value="1">فعال</option><option value="0">غیرفعال</option></select></div>
+          <div style="flex:1"><label>🛠 حالت تعمیر:</label><input type="hidden" id="adm_maintenance_mode" value="0" /><div class="seg-group" data-seg="adm_maintenance_mode"><div class="seg-btn active" data-val="0" onclick="setSeg('adm_maintenance_mode','0')">خاموش</div><div class="seg-btn" data-val="1" onclick="setSeg('adm_maintenance_mode','1')">روشن</div></div></div>
+          <div style="flex:1"><label>🗄 بکاپ خودکار:</label><input type="hidden" id="adm_backup_enabled" value="1" /><div class="seg-group" data-seg="adm_backup_enabled"><div class="seg-btn active" data-val="1" onclick="setSeg('adm_backup_enabled','1')">فعال</div><div class="seg-btn" data-val="0" onclick="setSeg('adm_backup_enabled','0')">غیرفعال</div></div></div>
         </div>
         <div class="btn-row">
           <div style="flex:1"><label>⏱ بازه بکاپ (ساعت):</label><input id="adm_backup_interval_hours" type="number" /></div>
@@ -905,6 +929,15 @@
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
+    function setSeg(id, val) {
+      const inp = document.getElementById(id);
+      if (inp) inp.value = String(val);
+      document.querySelectorAll(`.seg-group[data-seg="${id}"] .seg-btn`).forEach(el => {
+        el.classList.toggle('active', el.dataset.val === String(val));
+      });
+      if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    }
+
     function renderAdmin(adm, usr) {
       const nav = document.getElementById('navAdmin');
       if (!usr?.is_admin || !adm) { nav.style.display = 'none'; return; }
@@ -916,10 +949,15 @@
       document.getElementById('admAppr').innerText = (adm.approved_count || 0).toLocaleString();
       const s = adm.settings || {};
       const numIds = ['base_price_per_gb','pct_under_threshold','pct_over_threshold','bulk_threshold_gb','renew_discount_pct','global_discount_pct','referral_reward_pct','gb_options','trial_gb','trial_hours','trial_cooldown_days','force_join_channel','reminder_days','reminder_pct','card_number','card_owner','usdt_bep20','card_instant_mode','menu_mode','max_pending_orders','pending_alert_minutes','reseller_price_per_gb','reseller_min_gb','reseller_max_gb_per_acc','backup_interval_hours','backup_chat_id','maintenance_msg'];
-      numIds.forEach(k => { const el = document.getElementById('adm_' + k); if (el && s[k] !== undefined) el.value = s[k]; });
-      ['trial_enabled','force_join_enabled','maintenance_mode','backup_enabled'].forEach(k => {
+      numIds.forEach(k => {
         const el = document.getElementById('adm_' + k);
-        if (el) el.value = s[k] ? '1' : '0';
+        if (el && s[k] !== undefined) {
+          el.value = s[k];
+          setSeg('adm_' + k, s[k]);
+        }
+      });
+      ['trial_enabled','force_join_enabled','maintenance_mode','backup_enabled'].forEach(k => {
+        setSeg('adm_' + k, s[k] ? '1' : '0');
       });
       const oBox = document.getElementById('admOrdersList');
       const orders = adm.pending_orders || [];
