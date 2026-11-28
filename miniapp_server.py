@@ -393,6 +393,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     "pending_count": len(pend_list),
                     "approved_count": len(appr_list),
                     "total_toman": sum(int(o.get("total_toman") or 0) for o in appr_list if int(o.get("created_at") or 0) >= reset_at),
+                    "sales_is_reset": reset_at > 0,
                     "settings": {
                         "base_price_per_gb": int(cfg.get("base_price_per_gb", 15000)),
                         "pct_under_threshold": float(cfg.get("pct_under_threshold", 2.0)),
@@ -612,9 +613,16 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"message": f"🗑 کد تخفیف {code} حذف شد"})
             if path == "/vpnapp/api/admin/reset_sales":
                 cur_cfg = bot.load_json(bot.SETTINGS_PATH)
+                cur_cfg["prev_sales_reset_at"] = int(cur_cfg.get("sales_reset_at") or 0)
                 cur_cfg["sales_reset_at"] = int(time.time())
                 bot.save_json(bot.SETTINGS_PATH, cur_cfg)
                 return self._send_json(200, {"message": "✅ آمار فروش کل به ۰ ریست شد"})
+            if path == "/vpnapp/api/admin/restore_sales":
+                cur_cfg = bot.load_json(bot.SETTINGS_PATH)
+                cur_cfg["sales_reset_at"] = int(cur_cfg.get("prev_sales_reset_at") or 0)
+                cur_cfg["prev_sales_reset_at"] = 0
+                bot.save_json(bot.SETTINGS_PATH, cur_cfg)
+                return self._send_json(200, {"message": "↩️ آمار فروش قبلی بازگردانی شد"})
             return self._send_json(404, {"error": "Not found"})
 
         if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping", "/vpnapp/api/reseller_apply", "/vpnapp/api/reseller_create"):

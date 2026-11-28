@@ -257,6 +257,17 @@
     </div>
   </div>
 
+  <div id="resetModal" class="modal-bg" onclick="if(event.target===this) closeResetModal()">
+    <div class="modal-card">
+      <h3 style="margin:0 0 8px;font-size:15px">⚠️ ریست آمار فروش کل</h3>
+      <p class="muted" style="line-height:1.7;margin:0 0 14px">آیا مطمئن هستید که می‌خواهید فروش کل را به ۰ ریست کنید؟<br>(هر زمان بخواهید می‌توانید آمار قبلی را بازگردانی کنید.)</p>
+      <div class="btn-row">
+        <button class="btn btn-danger" style="flex:1" onclick="confirmResetSales()">✅ بله، ریست کن</button>
+        <button class="btn" style="flex:1" onclick="closeResetModal()">انصراف</button>
+      </div>
+    </div>
+  </div>
+
   <div class="container">
     <div class="topbar">
       <div class="brand">
@@ -465,7 +476,7 @@
       </div>
       <div class="stats-grid">
         <div class="stat-box"><div class="lbl">👥 کل کاربران</div><div class="val" id="admUsers">0</div></div>
-        <div class="stat-box"><div class="lbl">💰 فروش کل <span style="color:#93c5fd;cursor:pointer;font-size:10.5px" onclick="admResetSales()">(🔄 ریست)</span></div><div class="val" id="admTotal">0 ت</div></div>
+        <div class="stat-box"><div class="lbl">💰 فروش کل <span style="color:#93c5fd;cursor:pointer;font-size:10.5px" onclick="openResetModal()">(🔄 ریست)</span> <span id="admRestoreSalesBtn" style="color:#86efac;cursor:pointer;font-size:10.5px;display:none" onclick="admRestoreSales()">(↩️ بازگردانی)</span></div><div class="val" id="admTotal">0 ت</div></div>
         <div class="stat-box"><div class="lbl">⏳ سفارش در انتظار</div><div class="val" id="admPend">0</div></div>
         <div class="stat-box"><div class="lbl">✅ تاییدشده</div><div class="val" id="admAppr">0</div></div>
       </div>
@@ -1028,6 +1039,7 @@
       document.getElementById('admDemoBanner').style.display = usr.is_demo ? 'block' : 'none';
       document.getElementById('admUsers').innerText = (adm.users_count || 0).toLocaleString();
       document.getElementById('admTotal').innerText = `${(adm.total_toman || 0).toLocaleString()} ت`;
+      document.getElementById('admRestoreSalesBtn').style.display = adm.sales_is_reset ? 'inline' : 'none';
       document.getElementById('admPend').innerText = adm.pending_count || 0;
       document.getElementById('admAppr').innerText = (adm.approved_count || 0).toLocaleString();
       const s = adm.settings || {};
@@ -1083,9 +1095,21 @@
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
-    async function admResetSales() {
+    function openResetModal() { document.getElementById('resetModal').classList.add('show'); }
+    function closeResetModal() { document.getElementById('resetModal').classList.remove('show'); }
+
+    async function confirmResetSales() {
+      closeResetModal();
       try {
         const res = await api('admin/reset_sales', 'POST', {});
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admRestoreSales() {
+      try {
+        const res = await api('admin/restore_sales', 'POST', {});
         showToast(res.message);
         await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }

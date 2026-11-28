@@ -1634,7 +1634,10 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": f"🎛 حالت منو: { {'both': 'کیبورد + شیشه‌ای', 'inline': 'فقط شیشه‌ای', 'keyboard': 'فقط کیبوردی'}.get(get_user_menu_mode(0, env), 'فقط شیشه‌ای') }", "callback_data": "menu_mode"}],
     ])
     if not tenant:
-        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}, {"text": "🗑 ریست فروش کل", "callback_data": "adm_reset_sales"}])
+        row_adm = [{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}, {"text": "🗑 ریست فروش کل", "callback_data": "adm_reset_sales_ask"}]
+        if int(cfg.get("sales_reset_at") or 0) > 0:
+            row_adm.append({"text": "↩️ بازگردانی فروش", "callback_data": "adm_restore_sales"})
+        kb_rows.append(row_adm)
     kb_rows.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
@@ -3801,13 +3804,38 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
         show_admin_panel(token, chat_id, env, message_id=msg_id)
         return
 
+    if data == "adm_reset_sales_ask":
+        if user_id not in get_admin_ids(env):
+            return
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
+        kb = {
+            "inline_keyboard": [[
+                {"text": "✅ بله، ریست شود", "callback_data": "adm_reset_sales"},
+                {"text": "❌ انصراف", "callback_data": "adm_refresh"},
+            ]]
+        }
+        edit_message(token, chat_id, msg_id, "⚠️ <b>آیا مطمئن هستید که می‌خواهید آمار فروش کل را به ۰ ریست کنید؟</b>\n<i>(هر زمان بخواهید می‌توانید با دکمه «بازگردانی فروش» آمار قبلی را برگردانید.)</i>", reply_markup=kb)
+        return
+
     if data == "adm_reset_sales":
         if user_id not in get_admin_ids(env):
             return
         cur_cfg = load_json(SETTINGS_PATH)
+        cur_cfg["prev_sales_reset_at"] = int(cur_cfg.get("sales_reset_at") or 0)
         cur_cfg["sales_reset_at"] = int(time.time())
         save_json(SETTINGS_PATH, cur_cfg)
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ آمار فروش کل ریست شد"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
+    if data == "adm_restore_sales":
+        if user_id not in get_admin_ids(env):
+            return
+        cur_cfg = load_json(SETTINGS_PATH)
+        cur_cfg["sales_reset_at"] = int(cur_cfg.get("prev_sales_reset_at") or 0)
+        cur_cfg["prev_sales_reset_at"] = 0
+        save_json(SETTINGS_PATH, cur_cfg)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "↩️ آمار فروش قبلی بازگردانی شد"})
         show_admin_panel(token, chat_id, env, message_id=msg_id)
         return
 
