@@ -693,8 +693,11 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             coupon = str(body.get("coupon") or "").strip().upper()
             method = str(body.get("method") or "card")
             note = str(body.get("note") or "").strip()[:1000]
-            if not note:
-                return self._send_json(400, {"error": "لطفاً هش تراکنش یا لینک تراکنش را وارد کنید"})
+            photo_b64 = str(body.get("photo_b64") or "").strip() if method == "card" else ""
+            if method == "usdt" and not note:
+                return self._send_json(400, {"error": "لطفاً هش (0x...) یا لینک تراکنش را وارد کنید"})
+            if method == "card" and not note and not photo_b64:
+                return self._send_json(400, {"error": "لطفاً عکس رسید یا کد پیگیری را وارد کنید"})
             cpct = 0.0
             if coupon:
                 cp = bot.load_json(bot.COUPONS_PATH).get(coupon)
@@ -779,7 +782,25 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 ]]
             }
             tmp_p = None
+            if photo_b64 and method == "card":
+                try:
+                    raw_b64 = photo_b64.split(",", 1)[-1]
+                    img_bytes = base64.b64decode(raw_b64)
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                        tf.write(img_bytes)
+                        tmp_p = Path(tf.name)
+                except Exception:
+                    tmp_p = None
             if photo_b64:
+                try:
+                    raw_b64 = photo_b64.split(",", 1)[-1]
+                    img_bytes = base64.b64decode(raw_b64)
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                        tf.write(img_bytes)
+                        tmp_p = Path(tf.name)
+                except Exception:
+                    tmp_p = None
+            if photo_b64 and method == "card":
                 try:
                     raw_b64 = photo_b64.split(",", 1)[-1]
                     img_bytes = base64.b64decode(raw_b64)

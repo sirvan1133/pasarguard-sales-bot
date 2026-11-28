@@ -3771,7 +3771,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "usdt_amount": usdt_amt,
         }
         if method == "card":
-            instant_note = "⚡ پس از واریز، <b>فقط هش / لینک تراکنش یا کد پیگیری متنی</b> را بفرستید (ارسال عکس رسید غیرفعال است):"
+            instant_note = "⚡ پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید تا اشتراک شما <b>بلافاصله و خودکار</b> فعال شود:" if cfg.get("card_instant_mode", "all") != "off" else "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
             txt = (
                 "💳 <b>پرداخت کارت‌به‌کارت (فعال‌سازی آنی و خودکار)</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
@@ -4714,13 +4714,17 @@ def main() -> None:
                         finally:
                             tmp_z_path.unlink(missing_ok=True)
                     elif ("photo" in m or "document" in m) and st and st.get("step") == "await_receipt":
-                        send_message(
-                            token,
-                            m["chat"]["id"],
-                            "⚠️ ارسال عکس رسید غیرفعال است.\nلطفاً <b>فقط هش تراکنش (TXID) یا لینک تراکنش</b> را به‌صورت متنی ارسال کنید:",
-                            env=env,
-                            user_id=user_id,
-                        )
+                        if st.get("pay_method") == "usdt":
+                            send_message(
+                                token,
+                                m["chat"]["id"],
+                                "⚠️ برای پرداخت تتر، ارسال عکس غیرفعال است.\nلطفاً <b>فقط هش تراکنش (0x...) یا لینک تراکنش</b> را ارسال کنید:",
+                                env=env,
+                                user_id=user_id,
+                            )
+                        else:
+                            user_states.pop(user_id, None)
+                            handle_receipt_submission(token, env, m, st)
                     elif "photo" in m and m["photo"] and st and st.get("step") == "await_support":
                         user_states.pop(user_id, None)
                         uname_tg = m["from"].get("username") or "-"

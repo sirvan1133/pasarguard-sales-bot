@@ -118,10 +118,20 @@
       width: 100%; border: none; border-radius: 14px; padding: 12px 14px;
       font-family: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
       color: #fff; background: rgba(255,255,255,0.1);
-      transition: transform .14s ease, opacity .2s ease, box-shadow .2s ease;
+      position: relative; overflow: hidden;
+      transition: transform .18s cubic-bezier(.34,1.56,.64,1), opacity .2s ease, box-shadow .2s ease;
       display: inline-flex; align-items: center; justify-content: center; gap: 7px;
     }
-    .btn:active { transform: scale(0.96); }
+    .btn:active, .opt-pill:active, .seg-btn:active, .nav-item:active { transform: scale(0.93); }
+    .opt-pill, .seg-btn, .nav-item { position: relative; overflow: hidden; }
+    .ripple-wave {
+      position: absolute; border-radius: 50%; transform: scale(0); pointer-events: none;
+      background: rgba(255, 255, 255, 0.38);
+      animation: rippleAnim .5s cubic-bezier(.2,.8,.2,1) forwards;
+    }
+    @keyframes rippleAnim {
+      to { transform: scale(3); opacity: 0; }
+    }
     .btn-primary { background: linear-gradient(135deg, #4f8cff, #3b82f6); box-shadow: 0 6px 18px rgba(59,130,246,0.3); }
     .btn-success { background: linear-gradient(135deg, #22c55e, #16a34a); box-shadow: 0 6px 18px rgba(34,197,94,0.28); }
     .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
@@ -346,9 +356,13 @@
           <button class="btn btn-sm" onclick="closePayBox()">بستن</button>
         </div>
         <div id="payInfoBox" class="stat-box" style="margin-bottom:10px;line-height:1.8"></div>
-        <label id="receiptNoteLbl">🔗 هش تراکنش یا لینک تراکنش:</label>
-        <input id="receiptNote" placeholder="0x... یا لینک تراکنش / کد پیگیری" />
-        <button id="btnSubmitReceipt" class="btn btn-success" style="margin-top:10px" onclick="submitReceipt()">📤 ثبت و بررسی تراکنش</button>
+        <div id="receiptPhotoWrap">
+          <label>📸 عکس فیش واریزی:</label>
+          <input id="receiptFile" type="file" accept="image/*" />
+        </div>
+        <label id="receiptNoteLbl">🔗 کد پیگیری یا توضیحات:</label>
+        <input id="receiptNote" placeholder="کد پیگیری یا توضیحات..." />
+        <button id="btnSubmitReceipt" class="btn btn-success" style="margin-top:10px" onclick="submitReceipt()">📤 ارسال و ثبت سفارش</button>
       </div>
     </div>
 
@@ -691,9 +705,13 @@
       document.getElementById('btnPayUsdt').classList.toggle('btn-primary', method === 'usdt');
       const box = document.getElementById('payBox');
       const info = document.getElementById('payInfoBox');
+      const photoWrap = document.getElementById('receiptPhotoWrap');
+      const noteInp = document.getElementById('receiptNote');
       if (method === 'card') {
         document.getElementById('payBoxTitle').innerText = '💳 پرداخت کارت‌به‌کارت';
-        document.getElementById('receiptNoteLbl').innerText = '🔗 لینک یا کد پیگیری تراکنش:';
+        document.getElementById('receiptNoteLbl').innerText = '📝 کد پیگیری یا ۴ رقم آخر کارت (اختیاری):';
+        noteInp.placeholder = 'کد پیگیری یا توضیحات...';
+        photoWrap.style.display = 'block';
         const cnum = state.payment.card_number || 'ثبت نشده';
         const cown = state.payment.card_owner || '';
         const tmn = state.lastPrice.total_toman || 0;
@@ -708,6 +726,8 @@
       } else {
         document.getElementById('payBoxTitle').innerText = '🪙 پرداخت تتر (BEP20)';
         document.getElementById('receiptNoteLbl').innerText = '🔗 هش (0x...) یا لینک تراکنش:';
+        noteInp.placeholder = '0x... یا لینک تراکنش';
+        photoWrap.style.display = 'none';
         const baseU = Math.round((state.lastPrice.usdt_amount || 1) * 100) / 100;
         const randTail = Math.floor(1001 + Math.random() * 8999) / 1000000;
         state.exactUsdt = (baseU + randTail).toFixed(6);
@@ -725,20 +745,37 @@
       box.scrollIntoView({ behavior: 'smooth' });
     }
 
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = reject;
+        fr.readAsDataURL(file);
+      });
+    }
+
     async function submitReceipt() {
       const btn = document.getElementById('btnSubmitReceipt');
       const note = document.getElementById('receiptNote').value.trim();
-      if (!note) return showToast('لطفاً هش یا لینک تراکنش را وارد کنید');
+      const fileInput = document.getElementById('receiptFile');
+      const file = fileInput?.files && fileInput.files[0];
+      if (state.payMethod === 'usdt' && !note) return showToast('لطفاً هش یا لینک تراکنش را وارد کنید');
+      if (state.payMethod === 'card' && !note && !file) return showToast('عکس رسید یا کد پیگیری را وارد کنید');
       btn.disabled = true;
       btn.innerText = '⏳ در حال بررسی...';
       try {
+        let photo_b64 = '';
+        if (file && state.payMethod === 'card') {
+          photo_b64 = await readFileAsDataUrl(file);
+        }
         const coupon = document.getElementById('couponInput').value.trim();
         const res = await api('submit_receipt', 'POST', {
           gb: state.gb, months: state.months, target_username: state.renewTarget,
-          coupon, method: state.payMethod, note, exact_usdt: state.exactUsdt || null
+          coupon, method: state.payMethod, note, photo_b64, exact_usdt: state.exactUsdt || null
         });
         document.getElementById('receiptNote').value = '';
-        document.getElementById('payBox').style.display = 'none';
+        if (fileInput) fileInput.value = '';
+        closePayBox();
         showToast('✅ ' + res.message);
         if (res.auto_approved) {
           clearRenewTarget();
@@ -1054,6 +1091,20 @@
         await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }
     }
+
+    document.addEventListener('pointerdown', e => {
+      const btn = e.target.closest('.btn, .opt-pill, .seg-btn, .nav-item');
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const sz = Math.max(r.width, r.height);
+      const wave = document.createElement('span');
+      wave.className = 'ripple-wave';
+      wave.style.width = wave.style.height = sz + 'px';
+      wave.style.left = (e.clientX - r.left - sz / 2) + 'px';
+      wave.style.top = (e.clientY - r.top - sz / 2) + 'px';
+      btn.appendChild(wave);
+      setTimeout(() => wave.remove(), 520);
+    });
 
     loadBootstrap();
   </script>
