@@ -1516,7 +1516,8 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
     pending = sum(1 for o in orders.values() if o.get("status") == "pending")
     approved = [o for o in orders.values() if o.get("status") == "approved"]
     bot_subs = len({o.get("panel_username") for o in approved if o.get("panel_username")})
-    total_tmn = sum(int(o.get("total_toman", 0)) for o in approved)
+    reset_at = int(cfg.get("sales_reset_at") or 0)
+    total_tmn = sum(int(o.get("total_toman", 0)) for o in approved if int(o.get("created_at") or 0) >= reset_at)
     cfg = get_settings(env)
     tenant = is_tenant_bot(env)
     if tenant:
@@ -1633,7 +1634,7 @@ def show_admin_panel(token: str, chat_id: int, env: dict[str, str], message_id: 
         [{"text": f"🎛 حالت منو: { {'both': 'کیبورد + شیشه‌ای', 'inline': 'فقط شیشه‌ای', 'keyboard': 'فقط کیبوردی'}.get(get_user_menu_mode(0, env), 'فقط شیشه‌ای') }", "callback_data": "menu_mode"}],
     ])
     if not tenant:
-        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}])
+        kb_rows.append([{"text": "🔄 بروزرسانی پنل", "callback_data": "adm_refresh"}, {"text": "🗑 ریست فروش کل", "callback_data": "adm_reset_sales"}])
     kb_rows.append([{"text": "🏠 بازگشت به منوی اصلی", "callback_data": "home_back"}])
     kb = {"inline_keyboard": kb_rows}
     if message_id is not None:
@@ -3797,6 +3798,16 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
             return
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "🔄 بروزرسانی شد"})
+        show_admin_panel(token, chat_id, env, message_id=msg_id)
+        return
+
+    if data == "adm_reset_sales":
+        if user_id not in get_admin_ids(env):
+            return
+        cur_cfg = load_json(SETTINGS_PATH)
+        cur_cfg["sales_reset_at"] = int(time.time())
+        save_json(SETTINGS_PATH, cur_cfg)
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "✅ آمار فروش کل ریست شد"})
         show_admin_panel(token, chat_id, env, message_id=msg_id)
         return
 

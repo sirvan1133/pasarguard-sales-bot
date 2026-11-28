@@ -465,7 +465,7 @@
       </div>
       <div class="stats-grid">
         <div class="stat-box"><div class="lbl">👥 کل کاربران</div><div class="val" id="admUsers">0</div></div>
-        <div class="stat-box"><div class="lbl">💰 فروش کل</div><div class="val" id="admTotal">0 ت</div></div>
+        <div class="stat-box"><div class="lbl">💰 فروش کل <span style="color:#93c5fd;cursor:pointer;font-size:10.5px" onclick="admResetSales()">(🔄 ریست)</span></div><div class="val" id="admTotal">0 ت</div></div>
         <div class="stat-box"><div class="lbl">⏳ سفارش در انتظار</div><div class="val" id="admPend">0</div></div>
         <div class="stat-box"><div class="lbl">✅ تاییدشده</div><div class="val" id="admAppr">0</div></div>
       </div>
@@ -1078,6 +1078,14 @@
     async function admDelCoupon(code) {
       try {
         const res = await api('admin/coupon_del', 'POST', { code });
+        showToast(res.message);
+        await loadBootstrap();
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function admResetSales() {
+      try {
+        const res = await api('admin/reset_sales', 'POST', {});
         showToast(res.message);
         await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }

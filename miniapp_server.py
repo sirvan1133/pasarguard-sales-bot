@@ -387,11 +387,12 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 for t in all_tks:
                     for m in t.get("messages", []):
                         m["time_text"] = fmt_ts(int(m.get("ts", 0)))
+                reset_at = int(cfg.get("sales_reset_at") or 0)
                 adm_data = {
                     "users_count": len(bot.load_json(bot.USERS_PATH)),
                     "pending_count": len(pend_list),
                     "approved_count": len(appr_list),
-                    "total_toman": sum(int(o.get("total_toman") or 0) for o in appr_list),
+                    "total_toman": sum(int(o.get("total_toman") or 0) for o in appr_list if int(o.get("created_at") or 0) >= reset_at),
                     "settings": {
                         "base_price_per_gb": int(cfg.get("base_price_per_gb", 15000)),
                         "pct_under_threshold": float(cfg.get("pct_under_threshold", 2.0)),
@@ -609,6 +610,11 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                     del cps[code]
                     bot.save_json(bot.COUPONS_PATH, cps)
                 return self._send_json(200, {"message": f"🗑 کد تخفیف {code} حذف شد"})
+            if path == "/vpnapp/api/admin/reset_sales":
+                cur_cfg = bot.load_json(bot.SETTINGS_PATH)
+                cur_cfg["sales_reset_at"] = int(time.time())
+                bot.save_json(bot.SETTINGS_PATH, cur_cfg)
+                return self._send_json(200, {"message": "✅ آمار فروش کل به ۰ ریست شد"})
             return self._send_json(404, {"error": "Not found"})
 
         if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping", "/vpnapp/api/reseller_apply", "/vpnapp/api/reseller_create"):
