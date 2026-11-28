@@ -696,10 +696,15 @@
         document.getElementById('receiptNoteLbl').innerText = '🔗 لینک یا کد پیگیری تراکنش:';
         const cnum = state.payment.card_number || 'ثبت نشده';
         const cown = state.payment.card_owner || '';
+        const tmn = state.lastPrice.total_toman || 0;
         info.innerHTML = `
-          <div>مبلغ قابل پرداخت: <strong>${(state.lastPrice.total_toman || 0).toLocaleString()} تومان</strong></div>
-          <div>شماره کارت: <strong dir="ltr">${cnum}</strong> <button class="btn btn-sm" style="margin-right:6px" onclick="copyText('${cnum}')">📋 کپی</button></div>
-          <div>به نام: <strong>${cown}</strong></div>`;
+          <div>مبلغ قابل پرداخت: <strong>${tmn.toLocaleString()} تومان</strong></div>
+          <div>شماره کارت: <strong dir="ltr">${cnum}</strong></div>
+          <div>به نام: <strong>${cown}</strong></div>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-sm btn-primary" style="flex:1" onclick="copyText('${tmn}')">📋 کپی مبلغ</button>
+            <button class="btn btn-sm btn-primary" style="flex:1" onclick="copyText('${cnum}')">📋 کپی شماره کارت</button>
+          </div>`;
       } else {
         document.getElementById('payBoxTitle').innerText = '🪙 پرداخت تتر (BEP20)';
         document.getElementById('receiptNoteLbl').innerText = '🔗 هش (0x...) یا لینک تراکنش:';
@@ -708,10 +713,13 @@
         state.exactUsdt = (baseU + randTail).toFixed(6);
         const w = state.payment.usdt_bep20 || 'ثبت نشده';
         info.innerHTML = `
-          <div>مبلغ دقیق و یکتا: <strong dir="ltr">${state.exactUsdt} USDT</strong> <button class="btn btn-sm" style="margin-right:6px" onclick="copyText('${state.exactUsdt}')">📋 کپی مبلغ</button></div>
-          <div class="muted" style="font-size:11px">ارقام انتهایی برای شناسایی دقیق تراکنش شما اضافه شده است.</div>
-          <div style="word-break:break-all;margin-top:4px">آدرس ولت BEP20: <strong dir="ltr">${w}</strong></div>
-          <button class="btn btn-sm btn-primary" style="margin-top:6px" onclick="copyText('${w}')">📋 کپی آدرس ولت</button>`;
+          <div>مبلغ دقیق و یکتا: <strong dir="ltr">${state.exactUsdt} USDT</strong></div>
+          <div class="muted" style="font-size:11px;margin:2px 0 6px">ارقام انتهایی برای شناسایی دقیق تراکنش شما اضافه شده است.</div>
+          <div style="word-break:break-all">آدرس ولت BEP20:<br><strong dir="ltr" style="font-size:12px">${w}</strong></div>
+          <div class="btn-row" style="margin-top:10px">
+            <button class="btn btn-sm btn-primary" style="flex:1" onclick="copyText('${state.exactUsdt}')">📋 کپی مبلغ</button>
+            <button class="btn btn-sm btn-primary" style="flex:1" onclick="copyText('${w}')">📋 کپی آدرس ولت</button>
+          </div>`;
       }
       box.style.display = 'block';
       box.scrollIntoView({ behavior: 'smooth' });
