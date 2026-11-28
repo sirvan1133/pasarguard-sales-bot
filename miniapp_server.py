@@ -303,6 +303,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                         }
                     ],
                     "tickets": get_user_tickets(uid),
+                    "reseller": {
+                        "is_reseller": False,
+                        "price_per_gb": 5000,
+                        "min_gb": 500,
+                        "min_toman": 2500000,
+                        "max_acc_gb": 200,
+                        "accounts_created": 0,
+                        "total_gb_sold": 0,
+                    },
                     "admin_data": {
                         "users_count": random.randint(420, 1850),
                         "pending_count": random.randint(1, 6),
@@ -437,6 +446,15 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 },
                 "subs": fetch_user_subs(env, uid),
                 "tickets": get_user_tickets(uid),
+                "reseller": {
+                    "is_reseller": bool(bot.get_reseller(uid)),
+                    "price_per_gb": int(bot.get_reseller_price_per_gb(uid, env) if bot.get_reseller(uid) else cfg.get("reseller_price_per_gb", 5000)),
+                    "min_gb": int(cfg.get("reseller_min_gb", 500)),
+                    "min_toman": int(cfg.get("reseller_min_gb", 500)) * int(cfg.get("reseller_price_per_gb", 5000)),
+                    "max_acc_gb": int(cfg.get("reseller_max_gb_per_acc", 200)),
+                    "accounts_created": int((bot.get_reseller(uid) or {}).get("accounts_created", 0)),
+                    "total_gb_sold": int((bot.get_reseller(uid) or {}).get("total_gb_sold", 0)),
+                },
                 "admin_data": adm_data,
                 "referral_link": f"https://t.me/{bot_u}?start=ref_{uid}",
             })
@@ -593,8 +611,67 @@ class MiniAppHandler(BaseHTTPRequestHandler):
                 return self._send_json(200, {"message": f"🗑 کد تخفیف {code} حذف شد"})
             return self._send_json(404, {"error": "Not found"})
 
-        if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping"):
+        if is_demo and path in ("/vpnapp/api/buy_wallet", "/vpnapp/api/submit_receipt", "/vpnapp/api/trial", "/vpnapp/api/transfer", "/vpnapp/api/topup_ping", "/vpnapp/api/reseller_apply", "/vpnapp/api/reseller_create"):
             return self._send_json(200, {"ok": True, "message": "🧪 این عملیات در حالت تست و نمایشی شبیه‌سازی شد (تغییری در سرور واقعی ثبت نشد)."})
+
+        if path == "/vpnapp/api/reseller_apply":
+            cfg = bot.get_settings(env)
+            bal = bot.get_wallet_balance(uid)
+            min_gb = int(cfg.get("reseller_min_gb", 500))
+            min_tmn = min_gb * int(cfg.get("reseller_price_per_gb", 5000))
+            if bal < min_tmn:
+                return self._send_json(400, {"error": f"ابتدا باید حداقل {min_tmn:,} تومان ({min_gb} گیگ) کیف پول خود را شارژ کنید"})
+            uname_tg = u.get("username") or "-"
+            kb = {
+                "inline_keyboard": [[
+                    {"text": "✅ تایید و فعال‌سازی نماینده", "callback_data": f"adm_res_ok:{uid}"},
+                    {"text": "❌ رد درخواست", "callback_data": f"adm_res_no:{uid}"},
+                ]]
+            }
+            for adm_id in bot.get_admin_ids(env):
+                try:
+                    bot.send_message(token, adm_id, f"💼 <b>درخواست پنل نمایندگی (از مینی‌اپ)</b>\n\n👤 کاربر: <code>{uid}</code> (@{html.escape(uname_tg)})\n👛 موجودی: <b>{bal:,} تومان</b>", reply_markup=kb)
+                except Exception:
+                    pass
+            return self._send_json(200, {"message": "✅ درخواست نمایندگی شما برای مدیریت ارسال شد"})
+
+        if path == "/vpnapp/api/reseller_create":
+            rec = bot.get_reseller(uid)
+            if not rec:
+                return self._send_json(403, {"error": "دسترسی نمایندگی ندارید"})
+            cfg = bot.get_settings(env)
+            gb = max(1, int(body.get("gb") or 30))
+            months = max(1, min(12, int(body.get("months") or 1)))
+            max_acc = int(cfg.get("reseller_max_gb_per_acc", 200))
+            if max_acc > 0 and gb > max_acc:
+                return self._send_json(400, {"error": f"حداکثر حجم هر اکانت نماینده {max_acc} گیگ است"})
+            ppg = bot.get_reseller_price_per_gb(uid, env)
+            cost = gb * ppg
+            ok_d, new_b = bot.adjust_wallet(uid, -cost, f"ساخت اکانت نماینده از مینی‌اپ ({gb}GB/{months}M)")
+            if not ok_d:
+                return self._send_json(400, {"error": "موجودی کیف پول کافی نیست"})
+            oid = secrets.token_hex(4).upper()
+            try:
+                pu = bot.create_panel_user(env, oid, uid, gb, months, "reseller_miniapp")
+                uname, sub_url = pu["username"], pu.get("subscription_url") or ""
+            except Exception as e:
+                bot.adjust_wallet(uid, cost, "برگشت وجه خطای ساخت نماینده")
+                return self._send_json(500, {"error": f"خطا در پنل: {e}"})
+            bot.record_reseller_sale(uid, gb, count=1)
+            orders = bot.load_json(bot.ORDERS_PATH)
+            orders[oid] = {
+                "id": oid, "user_id": uid, "username": u.get("username", ""),
+                "type": "reseller_single", "gb": gb, "months": months,
+                "total_toman": cost, "usdt_amount": 0,
+                "pay_method": "reseller_miniapp", "status": "approved",
+                "panel_username": uname, "sub_url": sub_url, "created_at": int(time.time()),
+            }
+            bot.save_json(bot.ORDERS_PATH, orders)
+            try:
+                bot.send_qr_with_sub(token, uid, sub_url, f"✅ <b>اکانت نمایندگی آماده شد!</b>\n🆔 <code>{html.escape(uname)}</code>\n🔗 <code>{html.escape(sub_url)}</code>", env, uid)
+            except Exception:
+                pass
+            return self._send_json(200, {"message": f"✅ اکانت {uname} ساخته شد (موجودی: {new_b:,} ت)"})
 
         if path == "/vpnapp/api/calc":
             gb = max(1, min(5000, int(body.get("gb") or 30)))

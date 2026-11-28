@@ -302,6 +302,11 @@
           <button class="btn btn-primary" onclick="sendBotMenu()">💬 منوی ربات در چت</button>
         </div>
       </div>
+
+      <div id="resellerCard" class="card">
+        <div class="card-title"><span id="resCardTitle">🤝 درخواست نمایندگی</span></div>
+        <div id="resCardBody" class="muted" style="line-height:1.7">در حال بارگذاری...</div>
+      </div>
     </div>
 
     <!-- PAGE 2: SHOP -->
@@ -645,6 +650,7 @@
         document.getElementById('walletBalBig').innerText = balStr;
         document.getElementById('homeSubsCnt').innerText = `${state.subs.length} عدد`;
         document.getElementById('refLinkBox').innerText = d.referral_link || '';
+        renderResellerCard(d.reseller, d.user);
         renderAdmin(d.admin_data, d.user);
         renderGbGrid();
         renderSubs();
@@ -960,6 +966,49 @@
         showToast('🔒 تیکت بسته شد');
         await loadBootstrap();
         openTicket(state.activeTicketId);
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    function renderResellerCard(res, usr) {
+      if (!res) return;
+      const title = document.getElementById('resCardTitle');
+      const body = document.getElementById('resCardBody');
+      if (!res.is_reseller) {
+        title.innerText = '🤝 درخواست پنل نمایندگی';
+        body.innerHTML = `
+          <div>• تعرفه ثابت نماینده: <strong>${(res.price_per_gb || 0).toLocaleString()} تومان / گیگ</strong></div>
+          <div>• حداقل شارژ اولیه: <strong>${res.min_gb || 0} گیگ</strong> (${(res.min_toman || 0).toLocaleString()} تومان)</div>
+          <div>• موجودی فعلی شما: <strong>${(usr?.balance || 0).toLocaleString()} تومان</strong></div>
+          <button class="btn btn-danger" style="margin-top:10px" onclick="applyReseller()">📩 ارسال درخواست نمایندگی به ادمین</button>`;
+      } else {
+        title.innerText = '💼 پنل نمایندگی شما';
+        const estGb = res.price_per_gb > 0 ? Math.floor((usr?.balance || 0) / res.price_per_gb) : 0;
+        body.innerHTML = `
+          <div>• تعرفه شما: <strong>${(res.price_per_gb || 0).toLocaleString()} ت/گیگ</strong> | ظرفیت فعلی: <strong>~${estGb} GB</strong></div>
+          <div>• اکانت‌های ساخته‌شده: <strong>${res.accounts_created || 0}</strong> | کل فروش: <strong>${res.total_gb_sold || 0} GB</strong></div>
+          <div class="btn-row" style="margin-top:10px">
+            <input id="resGb" type="number" placeholder="حجم (GB)" value="30" />
+            <input id="resMonths" type="number" placeholder="ماه" value="1" style="max-width:85px" />
+          </div>
+          <button class="btn btn-success" style="margin-top:8px" onclick="createResellerAcc()">➕ ساخت اکانت نماینده</button>`;
+      }
+    }
+
+    async function applyReseller() {
+      try {
+        const res = await api('reseller_apply', 'POST', {});
+        showToast(res.message);
+      } catch (e) { showToast('❌ ' + e.message); }
+    }
+
+    async function createResellerAcc() {
+      const gb = parseInt(document.getElementById('resGb').value);
+      const months = parseInt(document.getElementById('resMonths').value);
+      if (!gb || !months) return showToast('حجم و مدت را وارد کنید');
+      try {
+        const res = await api('reseller_create', 'POST', { gb, months });
+        showToast(res.message);
+        await loadBootstrap();
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
