@@ -1657,13 +1657,19 @@ def show_invoice(
     is_renew = bool(target_username)
     p = calc_price(gb, months, env=env, is_renew=is_renew, coupon_pct=coupon_pct)
     if not inv_id:
+        rand_usdt = round(round(float(p["usdt_amount"]), 2) + random.randint(1001, 9999) / 1_000_000, 6)
         inv_id = save_invoice({
             "gb": gb,
             "months": months,
             "target_username": target_username,
             "coupon_code": coupon_code,
             "coupon_pct": coupon_pct,
+            "usdt_amount": rand_usdt,
         })
+    else:
+        inv_old = get_invoice(inv_id) or {}
+        rand_usdt = float(inv_old.get("usdt_amount") or round(round(float(p["usdt_amount"]), 2) + random.randint(1001, 9999) / 1_000_000, 6))
+    p["usdt_amount"] = rand_usdt
     title = f"🔄 <b>پیش‌فاکتور تمدید ({html.escape(target_username)})</b>" if is_renew else "🧾 <b>پیش‌فاکتور اشتراک جدید</b>"
     disc_lines = []
     if is_renew and p["discount_pct"] > 0:
@@ -1684,7 +1690,7 @@ def show_invoice(
         f"{disc_block}"
         f"💵 نرخ لحظه‌ای تتر: <code>{p['usdt_rate']:,}</code> تومان\n\n"
         f"💳 <b>مبلغ قابل پرداخت (تومان):</b> <code>{p['total_toman']:,}</code> تومان\n"
-        f"🪙 <b>مبلغ قابل پرداخت (تتر BEP20):</b> <code>{p['usdt_amount']}</code> USDT\n\n"
+        f"🪙 <b>مبلغ قابل پرداخت (تتر BEP20):</b> <code>{p['usdt_amount']:.6f}</code> USDT\n\n"
         "روش پرداخت را انتخاب کنید:"
     )
     bal = get_wallet_balance(chat_id)
@@ -1848,6 +1854,8 @@ def handle_receipt_submission(token: str, env: dict[str, str], m: dict, st: dict
         p = calc_price(gb, months, env=env, is_renew=is_renew, coupon_pct=coupon_pct)
         if pay_method == "card" and st.get("card_toman"):
             p["total_toman"] = int(st["card_toman"])
+        if pay_method == "usdt" and st.get("usdt_amount"):
+            p["usdt_amount"] = float(st["usdt_amount"])
     order_id = secrets.token_hex(4).upper()
 
     with orders_lock:
@@ -3747,6 +3755,7 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id, "text": "آدرس تتر هنوز توسط مدیریت تنظیم نشده است", "show_alert": True})
             return
         card_amt = inv.get("card_toman") or (generate_unique_card_amount(p["total_toman"]) if method == "card" else p["total_toman"])
+        usdt_amt = float(inv.get("usdt_amount") or round(round(float(p["usdt_amount"]), 2) + random.randint(1001, 9999) / 1_000_000, 6))
         if method == "card" and not inv.get("card_toman"):
             update_invoice(inv_id, {"card_toman": card_amt})
         tg_api(token, "answerCallbackQuery", {"callback_query_id": cb_id})
@@ -3759,9 +3768,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             "coupon_code": coupon_code,
             "coupon_pct": coupon_pct,
             "card_toman": card_amt,
+            "usdt_amount": usdt_amt,
         }
         if method == "card":
-            instant_note = "⚡ پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید تا اشتراک شما <b>بلافاصله و خودکار</b> فعال شود:" if cfg.get("card_instant_mode", "all") != "off" else "📸 پس از واریز، <b>عکس فیش یا کد پیگیری</b> را همینجا بفرستید:"
+            instant_note = "⚡ پس از واریز، <b>فقط هش / لینک تراکنش یا کد پیگیری متنی</b> را بفرستید (ارسال عکس رسید غیرفعال است):"
             txt = (
                 "💳 <b>پرداخت کارت‌به‌کارت (فعال‌سازی آنی و خودکار)</b>\n\n"
                 f"شماره کارت: <code>{html.escape(str(cfg['card_number']))}</code>\n"
@@ -3774,9 +3784,10 @@ def handle_callback(token: str, env: dict[str, str], cb: dict) -> None:
             txt = (
                 "🪙 <b>پرداخت تتر (شبکه BEP20 / BSC — تایید خودکار)</b>\n\n"
                 f"آدرس ولت BEP20:\n<code>{html.escape(str(cfg['usdt_bep20']))}</code>\n\n"
-                f"مبلغ دقیق: <code>{p['usdt_amount']}</code> USDT\n"
+                f"مبلغ دقیق و یکتا: <code>{usdt_amt:.6f}</code> USDT\n"
+                "<i>(ارقام انتهایی رندوم برای شناسایی دقیق تراکنش شماست)</i>\n"
                 f"(معادل {p['total_toman']:,} تومان با نرخ {p['usdt_rate']:,})\n\n"
-                "⚡ پس از انتقال، <b>هش تراکنش (0x...)</b> را بفرستید تا بلافاصله به‌صورت خودکار تایید شود (یا اسکرین‌شات بفرستید):"
+                "⚡ پس از انتقال، <b>فقط هش تراکنش (0x...) یا لینک تراکنش</b> را بفرستید تا بلافاصله تایید شود:"
             )
         edit_message(token, chat_id, msg_id, txt)
         return
@@ -4703,8 +4714,13 @@ def main() -> None:
                         finally:
                             tmp_z_path.unlink(missing_ok=True)
                     elif ("photo" in m or "document" in m) and st and st.get("step") == "await_receipt":
-                        user_states.pop(user_id, None)
-                        handle_receipt_submission(token, env, m, st)
+                        send_message(
+                            token,
+                            m["chat"]["id"],
+                            "⚠️ ارسال عکس رسید غیرفعال است.\nلطفاً <b>فقط هش تراکنش (TXID) یا لینک تراکنش</b> را به‌صورت متنی ارسال کنید:",
+                            env=env,
+                            user_id=user_id,
+                        )
                     elif "photo" in m and m["photo"] and st and st.get("step") == "await_support":
                         user_states.pop(user_id, None)
                         uname_tg = m["from"].get("username") or "-"

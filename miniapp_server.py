@@ -693,15 +693,19 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             coupon = str(body.get("coupon") or "").strip().upper()
             method = str(body.get("method") or "card")
             note = str(body.get("note") or "").strip()[:1000]
-            photo_b64 = str(body.get("photo_b64") or "").strip()
-            if not note and not photo_b64:
-                return self._send_json(400, {"error": "لطفاً عکس رسید یا کد پیگیری را وارد کنید"})
+            if not note:
+                return self._send_json(400, {"error": "لطفاً هش تراکنش یا لینک تراکنش را وارد کنید"})
             cpct = 0.0
             if coupon:
                 cp = bot.load_json(bot.COUPONS_PATH).get(coupon)
                 if cp and cp.get("active", True):
                     cpct = float(cp.get("percent", 0))
             p = bot.calc_price(gb, months, env=env, is_renew=bool(target_un), coupon_pct=cpct)
+            if method == "usdt" and body.get("exact_usdt"):
+                try:
+                    p["usdt_amount"] = round(float(body["exact_usdt"]), 6)
+                except Exception:
+                    pass
             oid = secrets.token_hex(4).upper()
             orders = bot.load_json(bot.ORDERS_PATH)
             if method == "usdt":
