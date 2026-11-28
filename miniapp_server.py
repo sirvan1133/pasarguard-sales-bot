@@ -199,7 +199,7 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
-        if path in ("/vpnapp/streisand.svg", "/vpnapp/v2box.png"):
+        if path in ("/vpnapp/streisand.svg", "/vpnapp/v2box.png", "/vpnapp/v2rayng.png"):
             asset_p = WEBAPP_HTML.parent / path.rsplit("/", 1)[-1]
             if not asset_p.exists():
                 self.send_error(404)
