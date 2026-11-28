@@ -780,14 +780,12 @@
     }
     function closeQr() { document.getElementById('qrModal').classList.remove('show'); }
     function importSub(app, url) {
-      const enc = encodeURIComponent(url);
-      const links = {
-        hiddify: `hiddify://import/${enc}`,
-        v2rayng: `v2rayng://install-config?url=${enc}`,
-        streisand: `streisand://import/${enc}`,
-        v2box: `v2box://install-sub?url=${enc}&name=VPN_VIP`,
-      };
-      if (links[app]) window.location.href = links[app];
+      const goUrl = `${window.location.origin}/vpnapp/go?app=${encodeURIComponent(app)}&url=${encodeURIComponent(url)}`;
+      if (tg && tg.openLink) {
+        tg.openLink(goUrl, { try_instant_view: false });
+      } else {
+        window.open(goUrl, '_blank');
+      }
     }
 
     async function claimTrial() {

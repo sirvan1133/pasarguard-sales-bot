@@ -199,6 +199,30 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        if path == "/vpnapp/go":
+            qs = urllib.parse.parse_qs(parsed.query)
+            app = (qs.get("app") or [""])[0].strip().lower()
+            raw_url = (qs.get("url") or [""])[0].strip()
+            if not raw_url.startswith(("http://", "https://")):
+                self.send_error(400)
+                return
+            enc = urllib.parse.quote(raw_url, safe="")
+            schemes = {
+                "hiddify": f"hiddify://import/{raw_url}",
+                "v2rayng": f"v2rayng://install-config?url={enc}",
+                "streisand": f"streisand://import/{raw_url}",
+                "v2box": f"v2box://install-sub?url={enc}&name=VPN_VIP",
+            }
+            target = schemes.get(app)
+            if not target:
+                self.send_error(400)
+                return
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+
         if path == "/vpnapp/api/qr":
             qs = urllib.parse.parse_qs(parsed.query)
             text = (qs.get("text") or [""])[0][:1000]
