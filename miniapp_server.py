@@ -199,6 +199,20 @@ class MiniAppHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        if path == "/vpnapp/streisand.svg":
+            svg_p = WEBAPP_HTML.parent / "streisand.svg"
+            if not svg_p.exists():
+                self.send_error(404)
+                return
+            data = svg_p.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         if path == "/vpnapp/go":
             qs = urllib.parse.parse_qs(parsed.query)
             app = (qs.get("app") or [""])[0].strip().lower()
