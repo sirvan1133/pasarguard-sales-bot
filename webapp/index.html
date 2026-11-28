@@ -749,17 +749,17 @@
               <button class="btn btn-sm btn-primary" onclick="openQr('${s.sub_url}')">📱 QR و لینک</button>
               <button class="btn btn-sm" onclick="startRenew('${s.username}')">🔄 تمدید</button>
             </div>
-            ${s.sub_url ? `<div class="btn-row" style="margin-top:6px;flex-wrap:wrap">
-              <button class="btn btn-sm" style="flex:1;font-size:11px;gap:5px" onclick="importSub('hiddify','${s.sub_url}')">
+            ${s.sub_url ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+              <button class="btn btn-sm" style="width:100%;font-size:11.5px;gap:6px" onclick="importSub('hiddify','${s.sub_url}')">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="5" fill="#fff"/><path d="M4 13.5l4.2-2.4V19H4v-5.5zm0 2.5h6.5v1.6H4V16zm5.8-6l4.2-2.4V19H9.8V10zm6.2-3.5l4-2.3V8.2h-4V6.5zm0 3.3h4V19h-4V9.8z" fill="#3b5bfd"/></svg> Hiddify
               </button>
-              <button class="btn btn-sm" style="flex:1;font-size:11px;gap:5px" onclick="importSub('v2rayng','${s.sub_url}')">
+              <button class="btn btn-sm" style="width:100%;font-size:11.5px;gap:6px" onclick="importSub('v2rayng','${s.sub_url}')">
                 <img src="/vpnapp/v2rayng.png" width="16" height="16" style="border-radius:4px;background:#fff;padding:1px" alt="v2rayNG" /> v2rayNG
               </button>
-              <button class="btn btn-sm" style="flex:1;font-size:11px;gap:5px" onclick="importSub('streisand','${s.sub_url}')">
+              <button class="btn btn-sm" style="width:100%;font-size:11.5px;gap:6px" onclick="importSub('streisand','${s.sub_url}')">
                 <img src="/vpnapp/streisand.svg" width="16" height="16" style="border-radius:4px" alt="S" /> Streisand
               </button>
-              <button class="btn btn-sm" style="flex:1;font-size:11px;gap:5px" onclick="importSub('v2box','${s.sub_url}')">
+              <button class="btn btn-sm" style="width:100%;font-size:11.5px;gap:6px" onclick="importSub('v2box','${s.sub_url}')">
                 <img src="/vpnapp/v2box.png" width="16" height="16" style="border-radius:4px" alt="V2Box" /> V2Box
               </button>
             </div>` : ''}
