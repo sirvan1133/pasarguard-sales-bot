@@ -335,15 +335,15 @@
         </div>
         <button id="btnBuyWallet" class="btn btn-success" style="margin-bottom:8px" onclick="payWallet()">👛 پرداخت آنی از کیف پول</button>
         <div class="btn-row">
-          <button class="btn btn-primary" onclick="openPayBox('card')">💳 کارت‌به‌کارت</button>
-          <button class="btn" onclick="openPayBox('usdt')">🪙 تتر (BEP20)</button>
+          <button id="btnPayCard" class="btn" onclick="openPayBox('card')">💳 کارت‌به‌کارت</button>
+          <button id="btnPayUsdt" class="btn" onclick="openPayBox('usdt')">🪙 تتر (BEP20)</button>
         </div>
       </div>
 
       <div id="payBox" class="card" style="display:none">
         <div class="card-title">
           <span id="payBoxTitle">💳 پرداخت کارت‌به‌کارت</span>
-          <button class="btn btn-sm" onclick="document.getElementById('payBox').style.display='none'">بستن</button>
+          <button class="btn btn-sm" onclick="closePayBox()">بستن</button>
         </div>
         <div id="payInfoBox" class="stat-box" style="margin-bottom:10px;line-height:1.8"></div>
         <label id="receiptNoteLbl">🔗 هش تراکنش یا لینک تراکنش:</label>
@@ -679,8 +679,16 @@
       } catch (e) { showToast('❌ ' + e.message); }
     }
 
+    function closePayBox() {
+      document.getElementById('payBox').style.display = 'none';
+      document.getElementById('btnPayCard').classList.remove('btn-primary');
+      document.getElementById('btnPayUsdt').classList.remove('btn-primary');
+    }
+
     function openPayBox(method) {
       state.payMethod = method;
+      document.getElementById('btnPayCard').classList.toggle('btn-primary', method === 'card');
+      document.getElementById('btnPayUsdt').classList.toggle('btn-primary', method === 'usdt');
       const box = document.getElementById('payBox');
       const info = document.getElementById('payInfoBox');
       if (method === 'card') {
